@@ -1,0 +1,134 @@
+name: Android — Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+  # NDK version used for the Rust cross-compile. Keep in sync with
+  # ANDROID_NDK_ROOT below if you change it.
+  NDK_VERSION: "26.3.11579264"
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Java (needed by the Godot Android exporter) ──────────────────────────
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ── Android NDK ──────────────────────────────────────────────────────────
+      - name: Install Android NDK ${{ env.NDK_VERSION }}
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;${{ env.NDK_VERSION }}"
+
+      # ── Rust ─────────────────────────────────────────────────────────────────
+      - name: Install Rust with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: rust-android-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-android-
+
+      - name: Build Rust extension (Android ABIs)
+        working-directory: rust
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+        run: |
+          cargo ndk \
+            --target aarch64-linux-android \
+            --target armv7-linux-androideabi \
+            --target x86_64-linux-android \
+            --platform 21 \
+            -- build --release
+
+      # ── Debug keystore ───────────────────────────────────────────────────────
+      - name: Generate debug keystore
+        run: |
+          mkdir -p android
+          keytool -genkey -v \
+            -keystore android/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      # ── Godot ────────────────────────────────────────────────────────────────
+      - name: Cache Godot binaries
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/godot
+            ~/godot
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Download Godot (headless)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+            -O /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d ~/godot
+
+      - name: Download Godot export templates
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          TEMPLATES_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$TEMPLATES_DIR"
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
+            -O /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+
+      - name: Add Godot to PATH
+        run: |
+          ln -s "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" \
+                "$HOME/.local/bin/godot"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Tell Godot where the Android SDK/NDK lives (editor-settings equivalent).
+      - name: Configure Godot Android editor settings
+        run: |
+          mkdir -p ~/.config/godot
+          cat >> ~/.config/godot/editor_settings-4.tres <<EOF
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          EOF
+
+      # ── Export ───────────────────────────────────────────────────────────────
+      - name: Create output directory
+        run: mkdir -p build/android
+
+      - name: Import assets
+        run: godot --headless --editor --quit || true
+
+      - name: Export Android APK (debug)
+        run: godot --headless --export-debug "Android" build/android/sloppy.apk
+
+      # ── Artifact ─────────────────────────────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sloppy-android-debug
+          path: build/android/sloppy.apk
+          retention-days: 30

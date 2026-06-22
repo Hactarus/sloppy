@@ -1,23 +1,32 @@
 extends Node2D
-## Top-level gameplay glue. Drives the Rust Conductor from the audio clock and
-## routes lane inputs into the Rust Judge. Presentation/feedback lives here in
-## GDScript; timing and scoring live in Rust (res://rust).
+## Top-level gameplay glue. Drives the Conductor from the audio clock and
+## routes lane inputs into the Judge. Presentation/feedback lives here in
+## GDScript; timing and scoring live in Rust (res://rust) when the GDExtension
+## is loaded, or in the pure-GDScript fallbacks on platforms where it isn't
+## (e.g. Web exports without a WASM Rust build).
 
 const LANE_COUNT := 4
 
 @onready var music: AudioStreamPlayer = $Music
 
-# Both classes are registered by the Rust GDExtension (see sloppy.gdextension).
-var conductor: Conductor
-var judge: Judge
+# Untyped so both the Rust GDExtension class and the GDScript fallback class
+# are accepted without a parse-time type error.
+var conductor
+var judge
 
 func _ready() -> void:
-	conductor = Conductor.new()
+	if ClassDB.class_exists("Conductor"):
+		conductor = Conductor.new()
+	else:
+		conductor = ConductorGD.new()
 	add_child(conductor)
 	conductor.bpm = 120.0
 	conductor.offset_sec = 0.0
 
-	judge = Judge.new()
+	if ClassDB.class_exists("Judge"):
+		judge = Judge.new()
+	else:
+		judge = JudgeGD.new()
 	judge.judged.connect(_on_judged)
 
 	# music.play()  # enable once a track is imported

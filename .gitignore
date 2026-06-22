@@ -21,6 +21,9 @@ rust/target/
 result
 result-*
 
+# Android keystore (generated in CI; never commit a real release keystore)
+android/*.keystore
+
 # OS / editor
 .DS_Store
 *.swp
