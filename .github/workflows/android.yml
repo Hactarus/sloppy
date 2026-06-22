@@ -102,6 +102,7 @@ jobs:
 
       - name: Add Godot to PATH
         run: |
+          mkdir -p "$HOME/.local/bin"
           ln -s "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" \
                 "$HOME/.local/bin/godot"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
