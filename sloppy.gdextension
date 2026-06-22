@@ -20,7 +20,5 @@ android.release.arm32 =  "res://rust/target/armv7-linux-androideabi/release/libs
 android.debug.x86_64 =   "res://rust/target/x86_64-linux-android/debug/libsloppy.so"
 android.release.x86_64 = "res://rust/target/x86_64-linux-android/release/libsloppy.so"
 
-; Web (Emscripten). Requires a Godot build/templates with threads matching the
-; crate; see README for the web export notes.
-web.debug.wasm32 =       "res://rust/target/wasm32-unknown-emscripten/debug/sloppy.wasm"
-web.release.wasm32 =     "res://rust/target/wasm32-unknown-emscripten/release/sloppy.wasm"
+; Web: no Rust WASM entry — the Web export preset uses extensions_support=false
+; and the GDScript fallbacks (ConductorGD / JudgeGD) are used instead.
