@@ -79,7 +79,15 @@ jobs:
       - name: Add .nojekyll
         run: touch build/web/.nojekyll
 
-      # ── Deploy ───────────────────────────────────────────────────────────────
+      # ── Artifacts & Deploy ───────────────────────────────────────────────────
+      # Zip of the full web build — downloadable from the Actions run summary.
+      - name: Upload web build as zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sloppy-web
+          path: build/web
+          retention-days: 30
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

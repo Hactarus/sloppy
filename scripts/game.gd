@@ -15,8 +15,10 @@ var conductor
 var judge
 
 func _ready() -> void:
+	# ClassDB.instantiate() is a runtime string lookup — no parse-time class
+	# resolution, so this compiles even when the GDExtension isn't loaded.
 	if ClassDB.class_exists("Conductor"):
-		conductor = Conductor.new()
+		conductor = ClassDB.instantiate("Conductor")
 	else:
 		conductor = ConductorGD.new()
 	add_child(conductor)
@@ -24,7 +26,7 @@ func _ready() -> void:
 	conductor.offset_sec = 0.0
 
 	if ClassDB.class_exists("Judge"):
-		judge = Judge.new()
+		judge = ClassDB.instantiate("Judge")
 	else:
 		judge = JudgeGD.new()
 	judge.judged.connect(_on_judged)
