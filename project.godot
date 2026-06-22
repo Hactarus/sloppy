@@ -1,0 +1,44 @@
+; Engine configuration file.
+; Godot 4 project — see https://docs.godotengine.org/en/stable/
+
+config_version=5
+
+[application]
+
+config/name="Sloppy"
+config/description="A rhythm game (DDR × Guitar Hero) that trains player reflexes with a gentle difficulty curve and constant positive feedback."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.3", "Mobile")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1080
+window/size/viewport_height=1920
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/handheld/orientation="portrait"
+
+[input]
+
+lane_0={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"keycode":68)]
+}
+lane_1={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"keycode":70)]
+}
+lane_2={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"keycode":74)]
+}
+lane_3={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"keycode":75)]
+}
+
+[rendering]
+
+renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true

@@ -1,0 +1,26 @@
+# Godot
+.godot/
+.import/
+export.cfg
+export_presets.cfg.local
+*.translation
+
+# Builds / exports
+/build/
+/export/
+*.apk
+*.aab
+*.wasm
+*.pck
+
+# Rust
+rust/target/
+**/*.rs.bk
+
+# Nix
+result
+result-*
+
+# OS / editor
+.DS_Store
+*.swp

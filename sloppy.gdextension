@@ -1,0 +1,26 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.3
+reloadable = true
+
+[libraries]
+; Desktop (editor / development)
+linux.debug.x86_64 =     "res://rust/target/debug/libsloppy.so"
+linux.release.x86_64 =   "res://rust/target/release/libsloppy.so"
+macos.debug =            "res://rust/target/debug/libsloppy.dylib"
+macos.release =          "res://rust/target/release/libsloppy.dylib"
+windows.debug.x86_64 =   "res://rust/target/debug/sloppy.dll"
+windows.release.x86_64 = "res://rust/target/release/sloppy.dll"
+
+; Android (build the matching Rust target per ABI before export)
+android.debug.arm64 =    "res://rust/target/aarch64-linux-android/debug/libsloppy.so"
+android.release.arm64 =  "res://rust/target/aarch64-linux-android/release/libsloppy.so"
+android.debug.arm32 =    "res://rust/target/armv7-linux-androideabi/debug/libsloppy.so"
+android.release.arm32 =  "res://rust/target/armv7-linux-androideabi/release/libsloppy.so"
+android.debug.x86_64 =   "res://rust/target/x86_64-linux-android/debug/libsloppy.so"
+android.release.x86_64 = "res://rust/target/x86_64-linux-android/release/libsloppy.so"
+
+; Web (Emscripten). Requires a Godot build/templates with threads matching the
+; crate; see README for the web export notes.
+web.debug.wasm32 =       "res://rust/target/wasm32-unknown-emscripten/debug/sloppy.wasm"
+web.release.wasm32 =     "res://rust/target/wasm32-unknown-emscripten/release/sloppy.wasm"

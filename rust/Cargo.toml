@@ -1,0 +1,13 @@
+[package]
+name = "sloppy"
+version = "0.1.0"
+edition = "2021"
+description = "Rust gameplay logic for the Sloppy rhythm game (timing, judging, scoring)"
+license = "MIT"
+
+[lib]
+# godot-rust builds a cdylib that Godot loads via the .gdextension file.
+crate-type = ["cdylib"]
+
+[dependencies]
+godot = "0.2"
