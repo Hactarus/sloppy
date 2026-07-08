@@ -64,16 +64,17 @@ impl Judge {
     /// player's score intact — we never subtract points.
     #[func]
     pub fn judge_hit(&mut self, timing_error_sec: f64) -> i64 {
-        let err = timing_error_sec.abs();
-
-        let judgment = if err <= self.perfect_window_sec {
-            Judgment::Perfect
-        } else if err <= self.great_window_sec {
-            Judgment::Great
-        } else if err <= self.good_window_sec {
-            Judgment::Good
-        } else {
-            Judgment::Miss
+        let j = crate::logic::classify_hit(
+            timing_error_sec,
+            self.perfect_window_sec,
+            self.great_window_sec,
+            self.good_window_sec,
+        );
+        let judgment = match j {
+            0 => Judgment::Perfect,
+            1 => Judgment::Great,
+            2 => Judgment::Good,
+            _ => Judgment::Miss,
         };
 
         match judgment {
@@ -88,16 +89,8 @@ impl Judge {
             }
         }
 
-        // Base points scale with quality; a combo multiplier rewards streaks
-        // so doing well feels increasingly great.
-        let base_points = match judgment {
-            Judgment::Perfect => 100,
-            Judgment::Great => 70,
-            Judgment::Good => 40,
-            Judgment::Miss => 0,
-        };
-        let multiplier = 1 + (self.combo / 10); // +1x every 10-combo
-        self.score += base_points * multiplier;
+        let multiplier = crate::logic::combo_multiplier(self.combo);
+        self.score += crate::logic::base_points(j) * multiplier;
 
         let j = judgment as i64;
         self.base

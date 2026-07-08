@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  # ── Rust unit tests ────────────────────────────────────────────────────────
+  rust:
+    name: Rust unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: rust-test-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-test-
+
+      - name: Run unit tests
+        working-directory: rust
+        run: cargo test --lib
+
+  # ── GDScript parse check ───────────────────────────────────────────────────
+  gdscript:
+    name: GDScript parse check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot binaries
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/godot
+            ~/godot
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Download Godot (headless)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+            -O /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d ~/godot
+
+      - name: Add Godot to PATH
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ln -s "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" \
+                "$HOME/.local/bin/godot"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Parse-check all GDScript files
+        run: |
+          output=$(godot --headless --editor --quit 2>&1) || true
+          echo "$output"
+          if echo "$output" | grep -qE "Parse Error:|ERROR:.*\.gd:[0-9]+"; then
+            echo "::error::GDScript parse errors detected — see output above"
+            exit 1
+          fi
+          echo "✓ All GDScript files parsed OK"

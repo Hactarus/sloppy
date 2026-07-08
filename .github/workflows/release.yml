@@ -1,0 +1,237 @@
+name: Release
+
+# Push a tag like "v1.0.0" to trigger. Both builds run in parallel;
+# the release job waits for both, then attaches the APK and web zip.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create the GitHub Release
+
+env:
+  GODOT_VERSION: "4.3"
+  NDK_VERSION: "26.3.11579264"
+
+jobs:
+  # ── Android APK ─────────────────────────────────────────────────────────────
+  build-android:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android NDK ${{ env.NDK_VERSION }}
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;${{ env.NDK_VERSION }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo-ndk binary
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-4-${{ runner.os }}
+
+      - name: Install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        run: |
+          for i in 1 2 3; do
+            cargo install cargo-ndk --locked && break
+            echo "Attempt $i failed — retrying in 10 s…"
+            sleep 10
+          done
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: rust-android-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-android-
+
+      - name: Build Rust extension (Android ABIs)
+        working-directory: rust
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_VERSION }}
+        run: |
+          cargo ndk \
+            --target aarch64-linux-android \
+            --target armv7-linux-androideabi \
+            --target x86_64-linux-android \
+            --platform 21 \
+            -- build --release
+
+      - name: Generate debug keystore
+        run: |
+          mkdir -p android
+          keytool -genkey -v \
+            -keystore android/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Cache Godot binaries
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/godot
+            ~/godot
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Download Godot (headless)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+            -O /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d ~/godot
+
+      - name: Download Godot export templates
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          TEMPLATES_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$TEMPLATES_DIR"
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
+            -O /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+
+      - name: Add Godot to PATH
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ln -s "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" \
+                "$HOME/.local/bin/godot"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure Godot Android editor settings
+        run: |
+          mkdir -p ~/.config/godot
+          cat >> ~/.config/godot/editor_settings-4.tres <<EOF
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          EOF
+
+      - name: Import assets
+        run: godot --headless --editor --quit || true
+
+      - name: Export Android APK (debug)
+        run: |
+          mkdir -p build/android
+          godot --headless --export-debug "Android" build/android/sloppy.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/android/sloppy.apk
+          retention-days: 1
+
+  # ── Web build ────────────────────────────────────────────────────────────────
+  build-web:
+    name: Build Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot binaries
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/godot
+            ~/godot
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Download Godot (headless)
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+            -O /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d ~/godot
+
+      - name: Download Godot export templates
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          TEMPLATES_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$TEMPLATES_DIR"
+          wget -q \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
+            -O /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+
+      - name: Add Godot to PATH
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ln -s "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" \
+                "$HOME/.local/bin/godot"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Import assets
+        run: godot --headless --editor --quit || true
+
+      - name: Export to Web
+        run: |
+          mkdir -p build/web
+          godot --headless --export-release "Web" build/web/index.html
+          touch build/web/.nojekyll
+
+      - name: Zip web build
+        run: zip -r sloppy-web.zip build/web/
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: sloppy-web.zip
+          retention-days: 1
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-android, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: dist
+
+      - name: Download web zip
+        uses: actions/download-artifact@v4
+        with:
+          name: release-web
+          path: dist
+
+      - name: Rename assets with version
+        run: |
+          TAG="${{ github.ref_name }}"
+          mv dist/sloppy.apk     "dist/sloppy-${TAG}.apk"
+          mv dist/sloppy-web.zip "dist/sloppy-web-${TAG}.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Sloppy $TAG" \
+            --generate-notes \
+            "dist/sloppy-${TAG}.apk#Android APK (debug, arm64 + arm32)" \
+            "dist/sloppy-web-${TAG}.zip#Web build (HTML5)"
