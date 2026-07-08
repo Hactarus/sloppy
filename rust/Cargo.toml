@@ -7,7 +7,7 @@ license = "MIT"
 
 [lib]
 # godot-rust builds a cdylib that Godot loads via the .gdextension file.
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 godot = "0.2"

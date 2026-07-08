@@ -41,14 +41,6 @@ impl INode for Conductor {
 
 #[godot_api]
 impl Conductor {
-    /// Seconds per beat for the current BPM.
-    fn sec_per_beat(&self) -> f64 {
-        if self.bpm <= 0.0 {
-            return 0.0;
-        }
-        60.0 / self.bpm
-    }
-
     /// Called every frame from GDScript with the current audio playback
     /// position (e.g. `AudioStreamPlayer.get_playback_position()` plus
     /// `AudioServer.get_time_since_last_mix()` minus output latency).
@@ -61,18 +53,14 @@ impl Conductor {
     /// Can be negative during the lead-in before the first beat.
     #[func]
     pub fn current_beat(&self) -> f64 {
-        let spb = self.sec_per_beat();
-        if spb == 0.0 {
-            return 0.0;
-        }
-        (self.song_pos_sec - self.offset_sec) / spb
+        crate::logic::beat_at(self.song_pos_sec, self.offset_sec, self.bpm)
     }
 
     /// Convert a beat number to its wall-clock time in the audio stream.
     /// Useful for scheduling note spawns ahead of time.
     #[func]
     pub fn beat_to_time(&self, beat: f64) -> f64 {
-        self.offset_sec + beat * self.sec_per_beat()
+        crate::logic::beat_to_sec(beat, self.offset_sec, self.bpm)
     }
 
     /// Signed seconds between now and when `beat` should be hit.

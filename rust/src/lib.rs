@@ -8,6 +8,7 @@ use godot::prelude::*;
 
 mod conductor;
 mod judge;
+pub mod logic;
 
 struct SloppyExtension;
 
