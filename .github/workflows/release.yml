@@ -91,23 +91,25 @@ jobs:
           key: godot-${{ env.GODOT_VERSION }}
 
       - name: Download Godot (headless)
-        if: steps.cache-godot.outputs.cache-hit != 'true'
         run: |
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
-            -O /tmp/godot.zip
-          unzip -q /tmp/godot.zip -d ~/godot
+          if [ ! -f "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" ]; then
+            wget -q \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+              -O /tmp/godot.zip
+            unzip -q /tmp/godot.zip -d ~/godot
+          fi
 
       - name: Download Godot export templates
-        if: steps.cache-godot.outputs.cache-hit != 'true'
         run: |
           TEMPLATES_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          mkdir -p "$TEMPLATES_DIR"
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
-            -O /tmp/templates.tpz
-          unzip -q /tmp/templates.tpz -d /tmp/templates
-          mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+          if [ ! -f "$TEMPLATES_DIR/android_debug.apk" ]; then
+            mkdir -p "$TEMPLATES_DIR"
+            wget -q \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
+              -O /tmp/templates.tpz
+            unzip -q /tmp/templates.tpz -d /tmp/templates
+            mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+          fi
 
       - name: Add Godot to PATH
         run: |
@@ -169,23 +171,25 @@ jobs:
           key: godot-${{ env.GODOT_VERSION }}
 
       - name: Download Godot (headless)
-        if: steps.cache-godot.outputs.cache-hit != 'true'
         run: |
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
-            -O /tmp/godot.zip
-          unzip -q /tmp/godot.zip -d ~/godot
+          if [ ! -f "$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" ]; then
+            wget -q \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
+              -O /tmp/godot.zip
+            unzip -q /tmp/godot.zip -d ~/godot
+          fi
 
       - name: Download Godot export templates
-        if: steps.cache-godot.outputs.cache-hit != 'true'
         run: |
           TEMPLATES_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          mkdir -p "$TEMPLATES_DIR"
-          wget -q \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
-            -O /tmp/templates.tpz
-          unzip -q /tmp/templates.tpz -d /tmp/templates
-          mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+          if [ ! -f "$TEMPLATES_DIR/web_nothreads_release.zip" ]; then
+            mkdir -p "$TEMPLATES_DIR"
+            wget -q \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" \
+              -O /tmp/templates.tpz
+            unzip -q /tmp/templates.tpz -d /tmp/templates
+            mv /tmp/templates/templates/* "$TEMPLATES_DIR/"
+          fi
 
       - name: Add Godot to PATH
         run: |
