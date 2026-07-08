@@ -146,6 +146,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: rust-linux-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-linux-
+
+      - name: Build Rust extension (Linux x86_64)
+        working-directory: rust
+        run: cargo build
+
       - name: Cache Godot binaries
         id: cache-godot
         uses: actions/cache@v4
