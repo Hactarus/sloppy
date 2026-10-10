@@ -11,6 +11,7 @@
 --   JT008 TAG_NOT_FOUND
 --   JT009 DIRECT_WRITE_FORBIDDEN  journal/postings written outside post_journal()
 --   JT010 LEDGER_INTEGRITY_ERROR  hash/chain check failed
+--   JT011 TRAINING_MIX            training and production accounts mixed in one journal
 
 -- ───────────────────────── append-only guard ─────────────────────────
 CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -34,15 +35,16 @@ BEGIN
 END $$;
 CREATE TRIGGER events_chain AFTER INSERT ON events FOR EACH ROW EXECUTE FUNCTION init_event_chain();
 
--- token_price_cents / country / timezone are frozen once the ledger has entries.
+-- token_price_cents / country / timezone / voucher_type / vat_regime are frozen once the ledger has entries.
 CREATE FUNCTION events_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD.status = 'closed' AND NEW.status <> 'closed' THEN
     RAISE EXCEPTION 'event % is closed; closing is irreversible', OLD.id USING ERRCODE = 'JT003';
   END IF;
-  IF (NEW.token_price_cents <> OLD.token_price_cents OR NEW.country <> OLD.country OR NEW.timezone <> OLD.timezone)
+  IF (NEW.token_price_cents <> OLD.token_price_cents OR NEW.country <> OLD.country OR NEW.timezone <> OLD.timezone
+      OR NEW.voucher_type <> OLD.voucher_type OR NEW.vat_regime <> OLD.vat_regime OR NEW.organizer_id <> OLD.organizer_id)
      AND EXISTS (SELECT 1 FROM journal WHERE event_id = OLD.id) THEN
-    RAISE EXCEPTION 'token_price_cents/country/timezone are immutable once the event has ledger entries'
+    RAISE EXCEPTION 'token_price_cents/country/timezone/voucher_type/vat_regime are immutable once the event has ledger entries'
       USING ERRCODE = 'JT004';
   END IF;
   IF NEW.status = 'closed' AND OLD.status <> 'closed' THEN NEW.closed_at := now(); END IF;
@@ -56,23 +58,29 @@ CREATE TABLE journal (
   event_id             uuid NOT NULL REFERENCES events(id),
   seq                  bigint NOT NULL CHECK (seq >= 1),            -- gap-free per event
   kind                 text NOT NULL CHECK (kind IN
-                         ('topup','promo_grant','sale','order_refund','cashout','transfer','reversal','breakage','adjustment')),
+                         ('topup','promo_grant','sale','order_refund','cashout','tag_replacement','reversal','breakage','adjustment',
+                          'tips_payout','cash_movement','cash_variance','psp_settlement')),
   client_tx_id         uuid NOT NULL,                               -- idempotency key (UUIDv7)
   request_hash         bytea CHECK (request_hash IS NULL OR octet_length(request_hash) = 32),
   device_id            uuid REFERENCES devices(id),
   staff_id             uuid REFERENCES staff(id),
   offline              boolean NOT NULL DEFAULT false,              -- created offline, synced later
+  training             boolean NOT NULL DEFAULT false,              -- training-mode op: shadow accounts only, excluded from production figures
+  app_version          text,
   client_created_at    timestamptz,
   occurred_at          timestamptz NOT NULL,                        -- server time of posting
   effective_at         timestamptz NOT NULL,                        -- business time (client time clamped to <= occurred_at)
   reverses_journal_id  uuid UNIQUE REFERENCES journal(id),          -- a journal can be reversed once
-  memo                 text CHECK (memo IS NULL OR memo !~ '[|[:cntrl:]]'),
+  -- No free text / personal data in hashed rows (R-LED-7): coded reason only; notes live in journal_notes.
+  reason_code          text CHECK (reason_code IS NULL OR reason_code IN ('customer_request','cashier_error','vendor_error',
+                         'duplicate','chargeback','lost_tag','psp_failed','event_cancelled','tag_replacement','event_close','other')),
   prev_hash            bytea NOT NULL CHECK (octet_length(prev_hash) = 32),
   hash                 bytea NOT NULL CHECK (octet_length(hash) = 32),
   UNIQUE (event_id, seq),
   UNIQUE (event_id, client_tx_id),
   UNIQUE (id, event_id),
-  CHECK ((kind = 'reversal') = (reverses_journal_id IS NOT NULL))
+  CHECK ((kind = 'reversal') = (reverses_journal_id IS NOT NULL)),
+  CHECK (kind NOT IN ('reversal','cashout','tag_replacement','cash_variance') OR reason_code IS NOT NULL)
 );
 CREATE INDEX journal_event_effective_idx ON journal(event_id, effective_at);
 
@@ -139,22 +147,23 @@ CREATE TRIGGER postings_balance AFTER INSERT ON postings FOR EACH ROW EXECUTE FU
 -- Canonical form (UTF-8, '|' separated; '' for NULL; booleans 'true'/'false';
 -- timestamps = integer microseconds since Unix epoch UTC; hashes lower-case hex):
 --   jeton/v1|event_id|seq|journal_id|kind|client_tx_id|reverses_journal_id|device_id|staff_id|
---   offline|occurred_us|effective_us|memo|request_hash_hex|prev_hash_hex|POSTINGS
+--   offline|training|occurred_us|effective_us|reason_code|request_hash_hex|prev_hash_hex|POSTINGS
 --   POSTINGS = comma-joined, ordered by line_no:  line_no:account_id:unit:amount
 -- hash = SHA-256(canonical). prev_hash(seq 1) = SHA-256('jeton-genesis|' || event_id).
 CREATE FUNCTION ledger_hash(
   p_event_id uuid, p_seq bigint, p_id uuid, p_kind text, p_client_tx_id uuid,
-  p_reverses uuid, p_device uuid, p_staff uuid, p_offline boolean,
-  p_occurred timestamptz, p_effective timestamptz, p_memo text,
+  p_reverses uuid, p_device uuid, p_staff uuid, p_offline boolean, p_training boolean,
+  p_occurred timestamptz, p_effective timestamptz, p_reason text,
   p_request_hash bytea, p_prev bytea, p_postings jsonb
 ) RETURNS bytea LANGUAGE sql IMMUTABLE AS $$
   SELECT sha256(convert_to(
     'jeton/v1|' || p_event_id::text || '|' || p_seq::text || '|' || p_id::text || '|' || p_kind || '|' ||
     p_client_tx_id::text || '|' || COALESCE(p_reverses::text, '') || '|' || COALESCE(p_device::text, '') || '|' ||
     COALESCE(p_staff::text, '') || '|' || (CASE WHEN p_offline THEN 'true' ELSE 'false' END) || '|' ||
+    (CASE WHEN p_training THEN 'true' ELSE 'false' END) || '|' ||
     ((extract(epoch FROM p_occurred)  * 1000000)::bigint)::text || '|' ||
     ((extract(epoch FROM p_effective) * 1000000)::bigint)::text || '|' ||
-    COALESCE(p_memo, '') || '|' || COALESCE(encode(p_request_hash, 'hex'), '') || '|' ||
+    COALESCE(p_reason, '') || '|' || COALESCE(encode(p_request_hash, 'hex'), '') || '|' ||
     encode(p_prev, 'hex') || '|' ||
     COALESCE((SELECT string_agg((e->>'line_no') || ':' || (e->>'account_id') || ':' || (e->>'unit') || ':' || (e->>'amount'),
                                 ',' ORDER BY (e->>'line_no')::int)
@@ -172,7 +181,7 @@ $$;
 -- Recompute the hash of a stored journal (verification).
 CREATE FUNCTION journal_recompute_hash(p_journal_id uuid) RETURNS bytea LANGUAGE sql STABLE AS $$
   SELECT ledger_hash(j.event_id, j.seq, j.id, j.kind, j.client_tx_id, j.reverses_journal_id, j.device_id, j.staff_id,
-                     j.offline, j.occurred_at, j.effective_at, j.memo, j.request_hash, j.prev_hash,
+                     j.offline, j.training, j.occurred_at, j.effective_at, j.reason_code, j.request_hash, j.prev_hash,
                      journal_postings_json(j.id))
     FROM journal j WHERE j.id = p_journal_id
 $$;
@@ -212,7 +221,7 @@ CREATE TABLE ledger_flags (
   event_id    uuid NOT NULL REFERENCES events(id),
   journal_id  uuid REFERENCES journal(id),
   flag        text NOT NULL CHECK (flag IN ('NEGATIVE_BALANCE','OFFLINE_CAP_EXCEEDED','TAG_UID_MISMATCH',
-                                            'TAG_BLOCKED_AT_SYNC','LATE_AFTER_CLOSE','CLOCK_SKEW')),
+                                            'TAG_BLOCKED_AT_SYNC','LATE_AFTER_CLOSE','CLOCK_SKEW','ADJUSTMENT_AFTER_CLOSE')),
   detail      jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -244,8 +253,9 @@ END $$;
 CREATE FUNCTION post_journal(
   p_event_id uuid, p_kind text, p_client_tx_id uuid, p_request_hash bytea,
   p_device_id uuid, p_staff_id uuid, p_client_created_at timestamptz, p_offline boolean,
-  p_reverses uuid, p_memo text, p_postings jsonb,
-  p_allow_negative boolean DEFAULT false, p_journal_id uuid DEFAULT NULL
+  p_reverses uuid, p_reason_code text, p_postings jsonb,
+  p_allow_negative boolean DEFAULT false, p_journal_id uuid DEFAULT NULL,
+  p_training boolean DEFAULT false, p_app_version text DEFAULT NULL
 ) RETURNS TABLE(r_journal_id uuid, r_seq bigint, r_hash bytea, r_replayed boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog AS $$
 DECLARE
@@ -279,10 +289,16 @@ BEGIN
     RAISE EXCEPTION 'DUPLICATE_TX: client_tx_id % already used with a different request', p_client_tx_id USING ERRCODE = 'JT001';
   END IF;
 
-  IF p_kind IN ('topup','promo_grant','sale','transfer') AND v_ev.status <> 'open' AND NOT p_offline THEN
-    RAISE EXCEPTION 'EVENT_NOT_OPEN: event is %', v_ev.status USING ERRCODE = 'JT003';
+  -- Event state rules. Offline sales are accepted late (flagged), training is allowed in draft.
+  IF v_ev.status = 'closed' AND p_kind NOT IN ('breakage','adjustment','reversal','cashout','tips_payout','cash_movement',
+                                              'cash_variance','psp_settlement')
+     AND NOT (p_offline AND p_kind = 'sale') THEN
+    RAISE EXCEPTION 'EVENT_NOT_OPEN: event is closed' USING ERRCODE = 'JT003';
   END IF;
-  IF p_kind IN ('topup','promo_grant') AND v_ev.status <> 'open' THEN
+  IF v_ev.status = 'draft' AND NOT p_training AND NOT p_offline THEN
+    RAISE EXCEPTION 'EVENT_NOT_OPEN: event is draft' USING ERRCODE = 'JT003';
+  END IF;
+  IF p_kind IN ('topup','promo_grant') AND v_ev.status <> 'open' AND NOT p_training THEN
     RAISE EXCEPTION 'EVENT_NOT_OPEN: event is %', v_ev.status USING ERRCODE = 'JT003';
   END IF;
 
@@ -299,6 +315,11 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_postings) e GROUP BY e->>'unit' HAVING sum((e->>'amount')::bigint) <> 0) THEN
     RAISE EXCEPTION 'UNBALANCED_JOURNAL: postings must sum to zero per unit' USING ERRCODE = 'JT004';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_postings) e JOIN accounts a ON a.id = (e->>'account_id')::uuid
+              WHERE a.training <> p_training) THEN
+    RAISE EXCEPTION 'TRAINING_MIX: training journals use training accounts only (and vice versa)' USING ERRCODE = 'JT011';
   END IF;
 
   -- Wallet sufficiency (race-free: chain lock held).
@@ -327,14 +348,14 @@ BEGIN
   END IF;
 
   v_seq := v_chain.last_seq + 1;
-  v_hash := ledger_hash(p_event_id, v_seq, v_id, p_kind, p_client_tx_id, p_reverses, p_device_id, p_staff_id, p_offline,
-                        v_occurred, v_effective, p_memo, p_request_hash, v_chain.last_hash, v_postings);
+  v_hash := ledger_hash(p_event_id, v_seq, v_id, p_kind, p_client_tx_id, p_reverses, p_device_id, p_staff_id, p_offline, p_training,
+                        v_occurred, v_effective, p_reason_code, p_request_hash, v_chain.last_hash, v_postings);
 
   PERFORM set_config('jeton.posting', v_id::text, true);
-  INSERT INTO journal(id, event_id, seq, kind, client_tx_id, request_hash, device_id, staff_id, offline,
-                      client_created_at, occurred_at, effective_at, reverses_journal_id, memo, prev_hash, hash)
-  VALUES (v_id, p_event_id, v_seq, p_kind, p_client_tx_id, p_request_hash, p_device_id, p_staff_id, p_offline,
-          p_client_created_at, v_occurred, v_effective, p_reverses, p_memo, v_chain.last_hash, v_hash);
+  INSERT INTO journal(id, event_id, seq, kind, client_tx_id, request_hash, device_id, staff_id, offline, training, app_version,
+                      client_created_at, occurred_at, effective_at, reverses_journal_id, reason_code, prev_hash, hash)
+  VALUES (v_id, p_event_id, v_seq, p_kind, p_client_tx_id, p_request_hash, p_device_id, p_staff_id, p_offline, p_training, p_app_version,
+          p_client_created_at, v_occurred, v_effective, p_reverses, p_reason_code, v_chain.last_hash, v_hash);
   INSERT INTO postings(journal_id, line_no, event_id, account_id, unit, amount)
   SELECT v_id, (e->>'line_no')::int, p_event_id, (e->>'account_id')::uuid, e->>'unit', (e->>'amount')::bigint
     FROM jsonb_array_elements(v_postings) e;
@@ -348,7 +369,10 @@ BEGIN
   IF v_skew THEN
     PERFORM add_ledger_flag(p_event_id, v_id, 'CLOCK_SKEW', jsonb_build_object('client_created_at', p_client_created_at, 'server_time', v_occurred));
   END IF;
-  IF v_ev.status = 'closed' AND p_kind IN ('sale','transfer') THEN
+  IF v_ev.status = 'closed' AND p_kind = 'adjustment' THEN
+    PERFORM add_ledger_flag(p_event_id, v_id, 'ADJUSTMENT_AFTER_CLOSE', '{}'::jsonb);
+  END IF;
+  IF v_ev.status = 'closed' AND p_kind = 'sale' THEN
     PERFORM add_ledger_flag(p_event_id, v_id, 'LATE_AFTER_CLOSE', '{}'::jsonb);
   END IF;
 

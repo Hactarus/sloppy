@@ -1,0 +1,2513 @@
+openapi: 3.1.0
+info:
+  title: Jeton API
+  version: 1.0.0
+  summary: NFC token cashless payments for events in Belgium and France.
+  description: |
+    Source of truth for the Jeton backend (Fastify) and both clients (React/Capacitor and Flutter).
+    Change this file first, then code.
+
+    ## Concepts
+    * **Token**: integer unit of value; price per token (`Event.token_price_cents`, default 200) is fixed per event.
+      Item prices are **integer tokens** (finer granularity = lower token value, ADR 0004). No floats anywhere.
+    * **Money** is integer **euro cents** (`*_cents`), **tokens** are integers (`*_tokens`). Both are JSON integers (int64).
+    * **Tag**: NFC sticker. It stores only the NDEF URI `https://<host>/t/<tag_code>`. Balances live on the server.
+      `tag_code` = 96 random bits as 20 Crockford-base32 chars (last char is `0` or `G`). The server binds `tag_code` to the
+      chip hardware UID (`uid`, upper-case hex, no separators, e.g. `04A1B2C3D4E5F6`); mismatch => `TAG_UID_MISMATCH`.
+    * **Timestamps**: RFC 3339 UTC (`2026-07-18T14:03:22.123Z`). Dates (`business_date`) are in the event time zone.
+    * **IDs**: UUID. Clients generate UUIDv7 for `client_tx_id` and for ids of resources they create with `PUT`.
+
+    ## Authentication (two layers)
+    1. **Device enrolment** (once per phone/tablet): an admin creates a short-lived enrolment code
+       (`POST /events/{event_id}/enrollment-codes`); the device exchanges it for a long-lived opaque **device token**
+       (`POST /auth/devices/enroll`). Send it as `Authorization: Bearer <device token>` (scheme `deviceAuth`).
+    2. **Staff PIN login** on an enrolled device: `GET /auth/staff` lists staff of the device's event,
+       `POST /auth/login {staff_id, pin}` (sent with the device token) returns a **JWT** (12 h, HS256/EdDSA, claims:
+       `sub`=staff_id, `did`=device_id, `eid`=event_id, `sid`=stand_id|null, `role`, `trn`=training flag, `exp`). Send it as
+       `Authorization: Bearer <jwt>` (scheme `staffAuth`). There is no refresh: log in again with the PIN.
+       After 5 wrong PINs a staff member is locked for 15 minutes on all devices (`PIN_LOCKED`, HTTP 429).
+    Roles: `admin` (everything), `cashier` (top-ups, cash-outs, tag replacement, reversals of own-day entries, cash desk),
+    `vendor` (sell, refund orders of own stand), `auditor` (read-only incl. reports/exports/verification).
+    Each operation lists allowed roles in `x-roles`. A **training** device (`training=true`) only ever affects training
+    data: its operations are chained but excluded from every production figure, number sequence and report.
+
+    ## Idempotency and offline
+    Every operation that writes to the ledger carries a `client_tx_id` (UUIDv7) in the body.
+    * Replaying the same `client_tx_id` with an identical body returns the original result with HTTP 200 and header
+      `Idempotent-Replayed: true` (first execution returns 201).
+    * Replaying it with a different body => `409 DUPLICATE_TX`.
+    * Catalog/configuration resources use client-generated UUIDv7 ids with `PUT` (naturally idempotent).
+    * **Gapless legal numbers** (`journal_seq` per event, `receipt_no` per stand, `z_no` per stand) are assigned by the server at
+      ingest. An operation created offline has only its provisional `client_tx_id` (+ optional device-local
+      `provisional_ref`); the final numbers are in the response / on the public balance page (ADR 0003).
+    * Offline terminals queue operations and submit them with `POST /sync/batch`. Offline spending is capped per tag per
+      device by the client (`Event.offline_cap_tokens`). The server accepts late operations; overdrafts and anomalies are
+      accepted and **flagged** (`/events/{event_id}/flags`), never silently fixed. Top-ups are online only.
+
+    ## Errors
+    All errors use `Error` (`application/json`) with a stable machine `code`; clients must switch on `code`, not on `message`.
+    `retryable=true` means the same request may succeed later without changes.
+
+    ## Privacy
+    The ledger contains no personal data and no free text. Free-text notes and refund contact details live in separate,
+    purgeable records referenced by id.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.jeton.example/v1
+    description: Production (placeholder host)
+  - url: http://{host}:{port}/v1
+    description: Local development
+    variables:
+      host: { default: dev.internal }
+      port: { default: '3000' }
+tags:
+  - name: System
+    description: Health and server time.
+  - name: Auth
+    description: Device enrolment and staff login.
+  - name: Admin
+    description: Events, organizers, staff, devices.
+  - name: Catalog
+    description: Stands, categories, items, VAT rates.
+  - name: Tags
+    description: NFC tag enrolment, lookup, status, replacement.
+  - name: Public
+    description: Unauthenticated guest-facing data.
+  - name: Top-ups
+    description: Selling tokens.
+  - name: Orders
+    description: Selling goods for tokens, refunds.
+  - name: Cash desk
+    description: Cash-outs, sessions, cash movements, PSP settlements, tips payouts.
+  - name: Ledger
+    description: Journal, reversals, hash chain, flags.
+  - name: Sync
+    description: Offline batch synchronisation.
+  - name: Receipts
+    description: Receipt data and DUPLICATA reprints.
+  - name: Reports
+    description: Z-reports, VAT, sales, liability, tips, exports.
+security:
+  - staffAuth: []
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Liveness and server time
+      description: Use `server_time` to estimate device clock skew. Unauthenticated.
+      security: []
+      responses:
+        '200':
+          description: Server is up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ok, server_time: '2026-07-18T14:03:22.123Z', version: 1.0.0, min_client_contract: 1.0.0 }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ───────────────────────────── Auth ─────────────────────────────
+  /auth/devices/enroll:
+    post:
+      tags: [Auth]
+      operationId: enrollDevice
+      summary: Exchange an enrolment code for a device token
+      description: |
+        The code is 8 characters (Crockford base32), valid 15 minutes, single use. The returned `device_token` is shown
+        once; store it in the Android Keystore / secure storage.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnrollDeviceRequest' }
+            example: { enrollment_code: 7K3M9QXA, device_name: Bar Tablet 2, platform: android, app_version: 1.0.0 }
+      responses:
+        '201':
+          description: Device enrolled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnrollDeviceResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410':
+          description: Enrolment code expired or already used (`ENROLLMENT_CODE_INVALID`).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/staff:
+    get:
+      tags: [Auth]
+      operationId: listLoginStaff
+      summary: Staff that may log in on this device
+      description: Pseudonymous display names for the PIN screen. Requires the device token only.
+      security: [{ deviceAuth: [] }]
+      responses:
+        '200':
+          description: Staff list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/StaffPublic' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Log in with a staff PIN
+      security: [{ deviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { staff_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, pin: '4821' }
+      responses:
+        '200':
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getSession
+      summary: Current session (staff, device, event, stand)
+      x-roles: [admin, cashier, vendor, auditor]
+      responses:
+        '200':
+          description: Session.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ───────────────────────────── Admin ─────────────────────────────
+  /organizers/{organizer_id}:
+    put:
+      tags: [Admin]
+      operationId: putOrganizer
+      summary: Create or replace an organizer (legal entity printed on receipts)
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/OrganizerId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Organizer' } } }
+      responses:
+        '200': { description: Replaced., content: { application/json: { schema: { $ref: '#/components/schemas/Organizer' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Organizer' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Admin]
+      operationId: getOrganizer
+      summary: Get an organizer
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/OrganizerId' }]
+      responses:
+        '200': { description: Organizer., content: { application/json: { schema: { $ref: '#/components/schemas/Organizer' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events:
+    get:
+      tags: [Admin]
+      operationId: listEvents
+      summary: List events visible to the caller
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses:
+        '200':
+          description: Page of events.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Page' }
+                  - type: object
+                    required: [items]
+                    properties: { items: { type: array, items: { $ref: '#/components/schemas/Event' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}:
+    parameters: [{ $ref: '#/components/parameters/EventId' }]
+    get:
+      tags: [Admin]
+      operationId: getEvent
+      summary: Get an event
+      x-roles: [admin, cashier, vendor, auditor]
+      responses:
+        '200': { description: Event., content: { application/json: { schema: { $ref: '#/components/schemas/Event' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Admin]
+      operationId: putEvent
+      summary: Create or update an event
+      description: |
+        `token_price_cents`, `country`, `timezone`, `voucher_type`, `vat_regime` and `organizer_id` become immutable once the
+        event has ledger entries (`EVENT_FIELD_LOCKED`). `status` can only move draft -> open -> closed here for draft -> open;
+        closing uses `POST /events/{event_id}/close`. `third_party_vendors_enabled` must be false in v1.
+        Warnings (non-blocking) are returned in `warnings`, e.g. `SINGLE_VAT_CATEGORY_ALL_ITEMS` (possible single-purpose voucher).
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EventWrite' } } }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/Event' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Event' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{event_id}/close:
+    post:
+      tags: [Admin]
+      operationId: closeEvent
+      summary: Close the event (irreversible)
+      description: |
+        Preconditions: every stand has a sealed Z-report for each business day with sales, and `tips_payable` is zero or
+        explicitly assigned (`tips_disposition`). Applies the event `breakage_treatment` to every remaining wallet balance
+        (journal kind `breakage`, `reason_code=event_close`): tokens -> `breakage`, euro value -> `breakage_income`.
+        **Breakage never creates VAT figures.** Returns the closing pack summary (final chain hash, totals).
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CloseEventRequest' }
+            example: { client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, tips_disposition: payout_done }
+      responses:
+        '200': { description: Closed (or replay)., content: { application/json: { schema: { $ref: '#/components/schemas/CloseEventResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{event_id}/staff:
+    parameters: [{ $ref: '#/components/parameters/EventId' }]
+    get:
+      tags: [Admin]
+      operationId: listStaff
+      summary: Staff assigned to the event
+      x-roles: [admin, auditor]
+      responses:
+        '200':
+          description: Staff.
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/Staff' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /staff/{staff_id}:
+    parameters: [{ $ref: '#/components/parameters/StaffId' }]
+    put:
+      tags: [Admin]
+      operationId: putStaff
+      summary: Create or update a staff member (set or reset the PIN)
+      description: '`pin` is write-only (4-8 digits), stored as an argon2id hash. Required on create.'
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StaffWrite' } } }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/Staff' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Staff' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/enrollment-codes:
+    post:
+      tags: [Admin]
+      operationId: createEnrollmentCode
+      summary: Create a device enrolment code
+      description: Training devices can only be enrolled while the event is `draft` or `open`; the flag is immutable afterwards.
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEnrollmentCodeRequest' }
+            example: { kind: terminal, stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, training: false }
+      responses:
+        '201': { description: Code (shown once)., content: { application/json: { schema: { $ref: '#/components/schemas/EnrollmentCode' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/devices:
+    get:
+      tags: [Admin]
+      operationId: listDevices
+      summary: Enrolled devices
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      responses:
+        '200':
+          description: Devices.
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/Device' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /devices/{device_id}/revoke:
+    post:
+      tags: [Admin]
+      operationId: revokeDevice
+      summary: Revoke a device (lost/stolen)
+      description: The device token stops working immediately (`DEVICE_REVOKED`). Queued offline operations of that device are still accepted on sync from a re-enrolled device only if flagged by an admin; by default they are rejected.
+      x-roles: [admin]
+      parameters: [{ name: device_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 200 } } } } }
+      responses:
+        '200': { description: Revoked., content: { application/json: { schema: { $ref: '#/components/schemas/Device' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Catalog ─────────────────────────────
+  /events/{event_id}/catalog:
+    get:
+      tags: [Catalog]
+      operationId: getCatalog
+      summary: Full catalog snapshot for terminals (cacheable)
+      description: |
+        One call returns everything a terminal needs offline: stands, categories, items (active only unless `include_inactive`),
+        the VAT rate table valid for the event (all categories x modes, dated), and the event config. Send `If-None-Match` with the
+        previous ETag (= `catalog_version`) to receive `304`. Refresh at login and every 5 minutes while online.
+        `expected_catalog_version` in `POST /orders` lets the server detect stale prices.
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+        - { name: If-None-Match, in: header, schema: { type: string } }
+      responses:
+        '200':
+          description: Catalog.
+          headers: { ETag: { schema: { type: string }, description: 'Quoted catalog_version.' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Catalog' } } }
+        '304': { description: 'Not modified.' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/stands/{stand_id}:
+    put:
+      tags: [Catalog]
+      operationId: putStand
+      summary: Create or update a stand / cash desk
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }, { $ref: '#/components/parameters/StandId' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Stand' } } } }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/Stand' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Stand' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/categories/{category_id}:
+    put:
+      tags: [Catalog]
+      operationId: putCategory
+      summary: Create or update a category
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }, { name: category_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/items/{item_id}:
+    put:
+      tags: [Catalog]
+      operationId: putItem
+      summary: Create or update an item
+      description: Items are never deleted; set `active=false`. Changing the price affects only future orders (lines snapshot price and VAT).
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }, { $ref: '#/components/parameters/ItemId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Item' }
+            example:
+              id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b
+              stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0001
+              category_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0002
+              name: Pils 25cl
+              name_i18n: { fr: Pils 25cl, nl: Pils 25cl, en: Lager 25cl }
+              price_tokens: 1
+              vat_category: ALCOHOL
+              default_consumption_mode: on_site
+              min_age: 16
+              allergens: [gluten]
+              icon: beer
+              color: '#F2B705'
+              active: true
+              sort_order: 10
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
+        '201': { description: Created., content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /vat-rates:
+    get:
+      tags: [Catalog]
+      operationId: listVatRates
+      summary: Dated VAT rate table
+      description: Rates are data, not code. `validated=false` rows must be flagged in the admin UI until the accountant validates them.
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { name: country, in: query, schema: { $ref: '#/components/schemas/Country' } }
+        - { name: on, in: query, description: Only rates valid on this date., schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Rates.
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/VatRate' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /vat-rates/validate:
+    post:
+      tags: [Catalog]
+      operationId: validateVatRates
+      summary: Mark VAT rates as validated by the accountant
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rates, validated_by]
+              properties:
+                validated_by: { type: string, maxLength: 100, description: 'Accountant name or reference.' }
+                rates:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [country, category_code, consumption_mode, valid_from]
+                    properties:
+                      country: { $ref: '#/components/schemas/Country' }
+                      category_code: { $ref: '#/components/schemas/VatCategoryCode' }
+                      consumption_mode: { $ref: '#/components/schemas/ConsumptionMode' }
+                      valid_from: { type: string, format: date }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { type: object, required: [updated], properties: { updated: { type: integer } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ───────────────────────────── Tags ─────────────────────────────
+  /tags/enroll:
+    post:
+      tags: [Tags]
+      operationId: enrollTag
+      summary: Step 1 of tag provisioning - register a blank chip and get what to write
+      description: |
+        The encoder app taps a blank tag, reads `uid` (and optionally the NXP originality signature), and calls this endpoint.
+        The server allocates a random `tag_code`, creates the tag as `pending` and returns the NDEF URL plus the NTAG
+        password parameters to write (`docs/nfc-tags.md`). Retrying with the same `uid` while the tag is still `pending`
+        returns the same `tag_code` (safe when a write failed). After `confirmTag` the tag is `active`; enrolling an active
+        tag fails with `TAG_ALREADY_ENROLLED`.
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnrollTagRequest' }
+            example: { client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, uid: 04A1B2C3D4E5F6, chip_type: ntag215, signature: null }
+      responses:
+        '200': { description: Already pending (retry)., content: { application/json: { schema: { $ref: '#/components/schemas/EnrollTagResponse' } } } }
+        '201': { description: Tag registered., content: { application/json: { schema: { $ref: '#/components/schemas/EnrollTagResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tags/{tag_code}/confirm:
+    post:
+      tags: [Tags]
+      operationId: confirmTag
+      summary: Step 2 of tag provisioning - confirm the tag was written and verified
+      description: Call after writing NDEF + password and reading the tag back. Moves the tag from `pending` to `active`.
+      x-roles: [admin, cashier]
+      parameters: [{ $ref: '#/components/parameters/TagCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmTagRequest' }
+            example: { client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, uid: 04A1B2C3D4E5F6, readback_ok: true, password_protected: true }
+      responses:
+        '200': { description: Tag active., content: { application/json: { schema: { $ref: '#/components/schemas/TagInfo' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tags/{tag_code}:
+    get:
+      tags: [Tags]
+      operationId: lookupTag
+      summary: Look up a tag and its wallet (tag_code + uid)
+      description: |
+        Call on every tap. `uid` is the hardware UID just read from the chip and must match the bound UID
+        (`TAG_UID_MISMATCH` 409 otherwise - possible clone). A tag with no wallet yet in this event is returned with
+        `wallet_status=new` and `balance_tokens=0`. A blocked wallet returns `TAG_BLOCKED` (423) except for role `admin`/`cashier`.
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/TagCode' }
+        - { name: uid, in: query, required: true, schema: { $ref: '#/components/schemas/TagUid' } }
+      responses:
+        '200': { description: Tag and wallet., content: { application/json: { schema: { $ref: '#/components/schemas/TagInfo' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '423': { $ref: '#/components/responses/Locked' }
+  /tags/{tag_code}/status:
+    post:
+      tags: [Tags]
+      operationId: setTagStatus
+      summary: Block or unblock a wallet (lost / suspected clone)
+      x-roles: [admin, cashier]
+      parameters: [{ $ref: '#/components/parameters/TagCode' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetTagStatusRequest' }
+            example: { client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b, status: blocked, reason_code: lost_tag }
+      responses:
+        '200': { description: Updated., content: { application/json: { schema: { $ref: '#/components/schemas/TagInfo' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tags/{tag_code}/replace:
+    post:
+      tags: [Tags]
+      operationId: replaceTag
+      summary: Replace a lost/damaged tag (moves the balance to a new tag)
+      description: |
+        The only way to move tokens between tags (no wallet-to-wallet transfer exists). Cashier/admin only, `reason_code`
+        mandatory. The old wallet is blocked, its balance is moved by a `tag_replacement` journal. The new tag must be `active`
+        with an empty wallet.
+      x-roles: [admin, cashier]
+      parameters: [{ $ref: '#/components/parameters/TagCode' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceTagRequest' } } }
+      responses:
+        '200': { description: Replaced (or replay)., content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceTagResponse' } } } }
+        '201': { description: Replaced., content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceTagResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{event_id}/tags:
+    get:
+      tags: [Tags]
+      operationId: listTags
+      summary: Tags/wallets of an event
+      x-roles: [admin, cashier, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: wallet_status, in: query, schema: { type: string, enum: [new, active, blocked] } }
+        - { name: negative_only, in: query, schema: { type: boolean, default: false } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Page of tags.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Page' }
+                  - type: object
+                    required: [items]
+                    properties: { items: { type: array, items: { $ref: '#/components/schemas/TagInfo' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /tags/{tag_code}/transactions:
+    get:
+      tags: [Tags]
+      operationId: listTagTransactions
+      summary: Wallet history of a tag (staff view)
+      x-roles: [admin, cashier, auditor]
+      parameters: [{ $ref: '#/components/parameters/TagCode' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses:
+        '200':
+          description: Page of entries, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Page' }
+                  - type: object
+                    required: [items]
+                    properties: { items: { type: array, items: { $ref: '#/components/schemas/WalletEntry' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Public ─────────────────────────────
+  /public/tags/{tag_code}:
+    get:
+      tags: [Public]
+      operationId: getPublicTagPage
+      summary: Data for the guest balance page (https://host/t/{tag_code})
+      description: |
+        No authentication. `tag_code` is an unguessable 96-bit secret acting as a bearer capability. Returns the balance,
+        the last 20 purchases (item names, no staff names), the event policy summary and legal mentions.
+        Responses carry `Cache-Control: no-store` and `X-Robots-Tag: noindex`; the page sets no cookies and loads no trackers.
+        Rate limited per IP. Unknown or malformed codes both return 404 (no oracle). If the tag has wallets in several events,
+        the most recent open event is returned.
+      security: []
+      parameters: [{ $ref: '#/components/parameters/TagCode' }]
+      responses:
+        '200': { description: Balance page data., content: { application/json: { schema: { $ref: '#/components/schemas/PublicTagPage' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ───────────────────────────── Top-ups ─────────────────────────────
+  /topups:
+    post:
+      tags: [Top-ups]
+      operationId: createTopup
+      summary: Sell tokens to a tag
+      description: |
+        Post only **after** the payment is confirmed (cash received, SumUp/Wero/Bancontact approved). `amount_cents` must be an exact
+        multiple of `Event.token_price_cents` (else `INVALID_AMOUNT`); `tokens = amount_cents / token_price_cents`. Same price for
+        all methods, no surcharge. `external_ref` (PSP reference) is unique per method: reusing it => `EXTERNAL_REF_ALREADY_USED`.
+        `payment_method=promo` (free tokens, admin only) posts from the promo account with no cash movement; `amount_cents` is then the
+        face value. Limits: `max_topup_tokens` per call, `max_balance_tokens` per tag (`LIMIT_EXCEEDED`).
+        Manual confirmation (`manual=true`, e.g. Wero/Bancontact before PSP integration) requires `external_ref`.
+        Top-ups are **not** VAT events for `multi_purpose` events (receipt: "bon multi-usage - pas de TVA a l'emission"); for
+        `single_purpose` events the response contains `vat_cents` booked at issue [À VALIDER, ADR 0005].
+        First top-up of a wallet stores `terms_version` (no personal data). Top-ups are online only (event must be `open`).
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TopupRequest' }
+            examples:
+              cash:
+                summary: 10 tokens paid in cash (token = EUR 2.00)
+                value:
+                  client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b
+                  tag: { tag_code: 0123456789ABCDEFGHJ0, uid: 04A1B2C3D4E5F6 }
+                  payment_method: cash
+                  amount_cents: 2000
+                  terms_version: tos-2026-07
+                  client_created_at: '2026-07-18T14:03:20.000Z'
+              sumup:
+                summary: SumUp card payment
+                value:
+                  client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5c
+                  tag: { tag_code: 0123456789ABCDEFGHJ0, uid: 04A1B2C3D4E5F6 }
+                  payment_method: sumup_card
+                  external_ref: TAAAB12CDE
+                  amount_cents: 1000
+      responses:
+        '200': { description: Replay of an earlier identical request., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Topup' } } } }
+        '201': { description: Top-up recorded., content: { application/json: { schema: { $ref: '#/components/schemas/Topup' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '423': { $ref: '#/components/responses/Locked' }
+
+  # ───────────────────────────── Orders ─────────────────────────────
+  /orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Sell items for tokens (the one-tap payment)
+      description: |
+        Body = basket (item ids + quantities) + tag tapped. The server prices from its own catalog: client prices are never
+        trusted. Pass `expected_total_tokens` (items + tip as displayed to the guest); if it differs from the server computation,
+        `PRICE_MISMATCH` (409) is returned with the current `catalog_version` - refresh the catalog and retry.
+        Basket edits are client-side only; one request = one confirmed payment.
+        * `tip_tokens` is optional, default 0, never pre-selected; capped by `tip_max_tokens` and `tip_max_percent`
+          (`TIP_TOO_HIGH`). The tip moves to the stand's `tips_payable` account, is excluded from VAT, revenue and Z gross sales,
+          and can never be spent on goods.
+        * `consumption_mode` (optional) overrides every item's `default_consumption_mode` for this order (on_site/takeaway); it
+          selects the VAT rate. `age_check_confirmed` must be true if any item has `min_age` (`AGE_CHECK_REQUIRED`).
+        * VAT is computed per rate group per order: `vat = round_half_up(gross_cents * rate_bp / (10000 + rate_bp))`,
+          `net = gross - vat`; response `vat_groups`. Rates come from the dated table at the order's effective date.
+        * Balance check is atomic (`INSUFFICIENT_BALANCE` with `balance_tokens`/`required_tokens` in `details`).
+        Allowed roles: `vendor` only for its own stand (`STAND_MISMATCH` otherwise), `admin`.
+        Offline terminals use `POST /sync/batch` with item type `order` instead.
+      x-roles: [admin, vendor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderRequest' }
+            example:
+              client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5d
+              stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0001
+              tag: { tag_code: 0123456789ABCDEFGHJ0, uid: 04A1B2C3D4E5F6 }
+              lines:
+                - { item_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f1001, qty: 2 }
+                - { item_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f1002, qty: 1 }
+              tip_tokens: 1
+              expected_total_tokens: 6
+              expected_catalog_version: 42
+              age_check_confirmed: true
+              client_created_at: '2026-07-18T14:03:20.000Z'
+      responses:
+        '200': { description: Replay of an earlier identical request., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '201': { description: Order paid., content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '423': { $ref: '#/components/responses/Locked' }
+  /orders/{order_id}:
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get an order
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { description: Order., content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/orders:
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      summary: Search orders
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: stand_id, in: query, schema: { $ref: '#/components/schemas/Uuid' } }
+        - { name: business_date, in: query, schema: { type: string, format: date } }
+        - { name: tag_code, in: query, schema: { $ref: '#/components/schemas/TagCode' } }
+        - { name: kind, in: query, schema: { type: string, enum: [sale, refund] } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Page of orders, newest first. Vendors only see their stand.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Page' }
+                  - type: object
+                    required: [items]
+                    properties: { items: { type: array, items: { $ref: '#/components/schemas/Order' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /orders/{order_id}/refunds:
+    post:
+      tags: [Orders]
+      operationId: refundOrder
+      summary: Refund all or part of an order back to the tag
+      description: |
+        Returns tokens to the original wallet and reproduces negative VAT (a `refund` order with `refund_of_order_id`).
+        Omit `lines` to refund the whole remaining order (including the tip if `include_tip`). `reason_code` is mandatory.
+        Over-refunding => `REFUND_EXCEEDS_ORIGINAL`. Gets its own `receipt_no` (credit note numbering is shared with sales of the stand).
+      x-roles: [admin, vendor, cashier]
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefundOrderRequest' }
+            example:
+              client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5e
+              reason_code: customer_request
+              lines: [{ line_no: 1, qty: 1 }]
+              include_tip: false
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '201': { description: Refund order created., content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Cash desk ─────────────────────────────
+  /cashouts:
+    post:
+      tags: [Cash desk]
+      operationId: createCashout
+      summary: Refund unused tokens to the guest as money
+      description: |
+        Reduces the tag balance (`tokens` omitted = full balance; at least `min_refund_tokens`) and pays out. Only until
+        `Event.refundable_until`. Refund to the original payment method is preferred; cash refunds are limited to the tag's cash
+        top-ups when `refund_cash_limited_to_cash_topups` (`REFUND_METHOD_LIMIT`). `method=bank_transfer` requires `contact`
+        (encrypted, stored in the purgeable `refund_contact` record, deleted after 180 days; never in the ledger).
+        No VAT effect (no supply took place).
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CashoutRequest' }
+            example:
+              client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5f
+              tag: { tag_code: 0123456789ABCDEFGHJ0, uid: 04A1B2C3D4E5F6 }
+              method: cash
+              reason_code: customer_request
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Cashout' } } } }
+        '201': { description: Cash-out recorded., content: { application/json: { schema: { $ref: '#/components/schemas/Cashout' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '423': { $ref: '#/components/responses/Locked' }
+  /cashdesk-sessions:
+    post:
+      tags: [Cash desk]
+      operationId: openCashdeskSession
+      summary: Open a cash desk session with an opening float
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/OpenSessionRequest' } } }
+      responses:
+        '201': { description: Opened., content: { application/json: { schema: { $ref: '#/components/schemas/CashdeskSession' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /cashdesk-sessions/{session_id}/close:
+    post:
+      tags: [Cash desk]
+      operationId: closeCashdeskSession
+      summary: Close a session with the counted cash by denomination
+      description: |
+        Server computes `expected_cents` = opening float + cash top-ups - cash-outs - cash tips payouts +/- cash movements of the session.
+        A non-zero variance is posted to `cash_over_short` (journal `cash_variance`) and needs an admin acknowledgement
+        (`POST .../ack`) before the Z-report of the desk can be sealed.
+      x-roles: [admin, cashier]
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CloseSessionRequest' } } }
+      responses:
+        '200': { description: Closed (or replay)., content: { application/json: { schema: { $ref: '#/components/schemas/CashdeskSession' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /cashdesk-sessions/{session_id}/ack:
+    post:
+      tags: [Cash desk]
+      operationId: ackCashdeskVariance
+      summary: Admin acknowledges the cash variance
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200': { description: Acknowledged., content: { application/json: { schema: { $ref: '#/components/schemas/CashdeskSession' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /cash-movements:
+    post:
+      tags: [Cash desk]
+      operationId: createCashMovement
+      summary: Record a float, pay-in, pay-out or drop with a reason
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CashMovementRequest' } } }
+      responses:
+        '201': { description: Recorded., content: { application/json: { schema: { $ref: '#/components/schemas/CashMovement' } } } }
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CashMovement' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{event_id}/psp-settlements:
+    post:
+      tags: [Cash desk]
+      operationId: importPspSettlement
+      summary: Import a PSP payout (SumUp / Wero / Bancontact) and match it to top-ups
+      description: |
+        One payout = one request (parse the PSP CSV client-side or in the admin console). Lines are matched to top-ups by
+        `psp_ref` (+ amount); unmatched lines are returned and reported. Posts `psp_clearing -> bank + psp_fees`.
+      x-roles: [admin]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PspSettlementRequest' } } }
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/PspSettlement' } } } }
+        '201': { description: Imported., content: { application/json: { schema: { $ref: '#/components/schemas/PspSettlement' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /tips-payouts:
+    post:
+      tags: [Cash desk]
+      operationId: createTipsPayout
+      summary: Pay out accumulated tips (tips_payable -> cash out)
+      description: |
+        Explicit journal that retires tip tokens and pays money. Tip tokens can never be redeemed for goods. `recipient_staff_id`
+        is a pseudonymous staff id (null for `method=donation`/collective). Limited by the stand's `tips_payable` balance
+        (`INSUFFICIENT_BALANCE`). The event cannot be closed while tips remain payable.
+      x-roles: [admin, cashier]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TipsPayoutRequest' } } }
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/TipsPayout' } } } }
+        '201': { description: Paid out., content: { application/json: { schema: { $ref: '#/components/schemas/TipsPayout' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Ledger ─────────────────────────────
+  /journals/{journal_id}:
+    get:
+      tags: [Ledger]
+      operationId: getJournal
+      summary: A journal entry with its postings and hash
+      x-roles: [admin, cashier, auditor]
+      parameters: [{ $ref: '#/components/parameters/JournalId' }]
+      responses:
+        '200': { description: Entry., content: { application/json: { schema: { $ref: '#/components/schemas/JournalEntry' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /journals/{journal_id}/reversals:
+    post:
+      tags: [Ledger]
+      operationId: reverseJournal
+      summary: Reverse a journal entry (the only way to correct)
+      description: |
+        Appends a `reversal` journal with all postings negated and `reverses_journal_id`. A journal can be reversed once
+        (`ALREADY_REVERSED`). `reason_code` mandatory; actor recorded. Reversing a top-up whose tokens were spent drives the wallet
+        negative: accepted and flagged `NEGATIVE_BALANCE`, never auto-fixed. `cashier` may reverse entries of the current business
+        day; older entries and anything after event close need `admin` (after close the reversal is flagged
+        `ADJUSTMENT_AFTER_CLOSE` and requires an `auditor` countersignature).
+      x-roles: [admin, cashier]
+      parameters: [{ $ref: '#/components/parameters/JournalId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReverseJournalRequest' } } }
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/JournalEntry' } } } }
+        '201': { description: Reversal appended., content: { application/json: { schema: { $ref: '#/components/schemas/JournalEntry' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /journals/{journal_id}/countersignature:
+    post:
+      tags: [Ledger]
+      operationId: countersignJournal
+      summary: Countersign a post-closure adjustment (admin and auditor each sign once)
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/JournalId' }]
+      responses:
+        '200': { description: Signed., content: { application/json: { schema: { $ref: '#/components/schemas/JournalEntry' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /events/{event_id}/journal:
+    get:
+      tags: [Ledger]
+      operationId: listJournal
+      summary: Journal entries in sequence order
+      x-roles: [admin, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: after_seq, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: include_training, in: query, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200':
+          description: Entries with seq > after_seq.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_after_seq]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/JournalEntry' } }
+                  next_after_seq: { type: integer, format: int64, description: 'Pass as `after_seq` for the next page; equals the last seq returned.' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/ledger/verify:
+    get:
+      tags: [Ledger]
+      operationId: verifyLedger
+      summary: Verify the hash chain, balances and invariants of an event
+      description: |
+        Recomputes every journal hash (canonical form in ADR 0003), checks gapless `seq`, the chain links, per-unit balance of every
+        journal, the head against `event_chain`, and the reconciliation invariants (token supply, cache vs postings, liability =
+        outstanding tokens x price). An offline-runnable tool does the same on a CSV export. Read-only; may take seconds.
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      responses:
+        '200': { description: Verification result (also when it fails - see `ok`)., content: { application/json: { schema: { $ref: '#/components/schemas/LedgerVerification' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/ledger/head:
+    get:
+      tags: [Ledger]
+      operationId: getLedgerHead
+      summary: Current chain head (to anchor externally)
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      responses:
+        '200': { description: Head., content: { application/json: { schema: { $ref: '#/components/schemas/LedgerHead' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/flags:
+    get:
+      tags: [Ledger]
+      operationId: listFlags
+      summary: Anomaly flags (negative balances, UID mismatches, late operations ...)
+      x-roles: [admin, auditor, cashier]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: resolved, in: query, schema: { type: boolean } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: Flags.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Page' }
+                  - type: object
+                    required: [items]
+                    properties: { items: { type: array, items: { $ref: '#/components/schemas/LedgerFlag' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /flags/{flag_id}/resolve:
+    post:
+      tags: [Ledger]
+      operationId: resolveFlag
+      summary: Mark a flag as handled (appends a resolution; the flag is kept)
+      x-roles: [admin]
+      parameters: [{ name: flag_id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [note], properties: { note: { type: string, maxLength: 500, description: 'Purgeable note; no personal data in the ledger.' } } } } }
+      responses:
+        '200': { description: Resolved., content: { application/json: { schema: { $ref: '#/components/schemas/LedgerFlag' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Sync ─────────────────────────────
+  /sync/batch:
+    post:
+      tags: [Sync]
+      operationId: syncBatch
+      summary: Submit queued offline operations
+      description: |
+        Max 200 items per request (`413 PAYLOAD_TOO_LARGE` above); items are applied **in array order** (send them in creation
+        order). Auth: `staffAuth` or `deviceAuth` (a JWT may have expired while offline); each item carries the `staff_id` that
+        created it, validated against the device's event and the role needed for the operation type.
+        The response is always 200 with one result per item, in order:
+        * `applied` - posted now (`result` holds the created resource incl. final `receipt_no`/`journal_seq`);
+        * `duplicate` - `client_tx_id` already applied with the same body; `result` is the original (safe to drop from the queue);
+        * `rejected` - permanently invalid (`error`, never retry; e.g. `TAG_NOT_FOUND`, `DUPLICATE_TX` with different body,
+          `DEVICE_REVOKED`); `retryable` errors (e.g. 503) should instead fail the whole request with a 5xx.
+        Late offline `order`s are **accepted even when they overdraw the wallet, hit a blocked tag, mismatch the UID, exceed the
+        offline cap or arrive after event close**: the order is posted and a flag is raised (`NEGATIVE_BALANCE`,
+        `TAG_BLOCKED_AT_SYNC`, `TAG_UID_MISMATCH`, `OFFLINE_CAP_EXCEEDED`, `LATE_AFTER_CLOSE`); the item's `flags` lists them.
+        `top-up` is not accepted offline. Business time = `client_created_at` clamped to server time (skew => `CLOCK_SKEW` flag).
+      x-roles: [admin, cashier, vendor]
+      security: [{ staffAuth: [] }, { deviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SyncBatchRequest' }
+            example:
+              batch_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f9999
+              items:
+                - type: order
+                  staff_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0aaa
+                  provisional_ref: T2-000187
+                  payload:
+                    client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a60
+                    stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0001
+                    tag: { tag_code: 0123456789ABCDEFGHJ0, uid: 04A1B2C3D4E5F6 }
+                    lines: [{ item_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f1001, qty: 1 }]
+                    client_created_at: '2026-07-18T14:01:02.000Z'
+      responses:
+        '200': { description: Per-item results., content: { application/json: { schema: { $ref: '#/components/schemas/SyncBatchResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  # ───────────────────────────── Receipts ─────────────────────────────
+  /receipts/{document_type}/{document_id}/prints:
+    post:
+      tags: [Receipts]
+      operationId: printReceipt
+      summary: Get receipt data to print/show; every call is logged
+      description: |
+        Receipts are optional and on demand. The first call returns `duplicata=false`; every later call returns
+        `duplicata=true` and the client MUST render the marker "DUPLICATA" prominently. Contains organizer legal identity, legal
+        VAT mentions (franchise / exempt regimes), lines, totals by VAT rate, tip (separate: "pourboire/fooi - hors TVA"),
+        payment in tokens, optional balance after, `receipt_no` (null for training: marked "TEST"), and for BE events with
+        `be_gks_required` the mention "Not a fiscal ticket". No staff names (privacy).
+      x-roles: [admin, cashier, vendor]
+      parameters:
+        - { name: document_type, in: path, required: true, schema: { type: string, enum: [order, topup, cashout] } }
+        - { name: document_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+      responses:
+        '200': { description: Receipt., content: { application/json: { schema: { $ref: '#/components/schemas/Receipt' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Reports ─────────────────────────────
+  /events/{event_id}/reports/z:
+    get:
+      tags: [Reports]
+      operationId: previewZReport
+      summary: Live (unsealed) Z-report preview for a stand and business day
+      description: |
+        Same content as the sealed report but not numbered and not stored. `stand_id` is required (Z-reports are per stand;
+        a cash desk's Z covers top-ups, cash-outs, tips payouts and cash reconciliation). Training data excluded.
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: stand_id, in: query, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+        - { name: business_date, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Preview., content: { application/json: { schema: { $ref: '#/components/schemas/ZReport' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/z-reports:
+    post:
+      tags: [Reports]
+      operationId: sealZReport
+      summary: Seal (close) the Z-report of a stand for a business day
+      description: |
+        Assigns the next gapless `z_no` of the stand, stores the cumulative `grand_total_cents`, the first/last `receipt_no` and
+        the ledger head hash, and chains the report. Sealed reports are immutable; a second Z for the same stand and day is
+        refused (`Z_ALREADY_SEALED`). Refused while the stand has unsynced offline operations known to the server
+        (`PENDING_OFFLINE_OPERATIONS`) or an unacknowledged cash variance. At each seal the chain head hash is e-mailed to the organizer.
+      x-roles: [admin, cashier, vendor]
+      parameters: [{ $ref: '#/components/parameters/EventId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SealZRequest' }
+            example: { client_tx_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a70, stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0001, business_date: '2026-07-18' }
+      responses:
+        '200': { description: Replay., headers: { Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/ZReport' } } } }
+        '201': { description: Sealed., content: { application/json: { schema: { $ref: '#/components/schemas/ZReport' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Reports]
+      operationId: listZReports
+      summary: Sealed Z-reports
+      x-roles: [admin, cashier, vendor, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: stand_id, in: query, schema: { $ref: '#/components/schemas/Uuid' } }
+      responses:
+        '200':
+          description: Sealed reports ordered by z_seq.
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/ZReport' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/reports/sales:
+    get:
+      tags: [Reports]
+      operationId: getSalesReport
+      summary: Sales grouped by item, category, VAT rate, stand, hour or day
+      x-roles: [admin, auditor, vendor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: group_by, in: query, required: true, schema: { type: string, enum: [item, category, vat_rate, stand, hour, day] } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: stand_id, in: query, schema: { $ref: '#/components/schemas/Uuid' } }
+      responses:
+        '200': { description: Report., content: { application/json: { schema: { $ref: '#/components/schemas/SalesReport' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/reports/vat:
+    get:
+      tags: [Reports]
+      operationId: getVatReport
+      summary: VAT breakdown by day, stand and rate, with return-box mapping
+      description: |
+        VAT due on redemption (multi-purpose) per rate; for `single_purpose` events the VAT booked at top-up. Never includes
+        breakage or refunds of unused tokens. `box` is the configurable mapping to BE grids / FR CA3 lines (null when unmapped).
+        Promo-funded sales are reported in the separate `promo_funded` figures [À VALIDER].
+      x-roles: [admin, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Report., content: { application/json: { schema: { $ref: '#/components/schemas/VatReport' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/reports/topups:
+    get:
+      tags: [Reports]
+      operationId: getTopupsReport
+      summary: Top-ups, cash-outs and PSP reconciliation by payment method
+      description: Counts, gross, PSP fees, net, payouts, unmatched PSP lines, cash desk reconciliation (expected vs counted).
+      x-roles: [admin, auditor, cashier]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Report., content: { application/json: { schema: { $ref: '#/components/schemas/TopupsReport' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/reports/liability:
+    get:
+      tags: [Reports]
+      operationId: getLiabilityReport
+      summary: Outstanding token liability, promo, refunds and breakage
+      description: '`as_of` defaults to now. After close it includes the breakage journal totals (non-VAT income, count and euro value).'
+      x-roles: [admin, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: as_of, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Report., content: { application/json: { schema: { $ref: '#/components/schemas/LiabilityReport' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /events/{event_id}/reports/tips:
+    get:
+      tags: [Reports]
+      operationId: getTipsReport
+      summary: Tips by stand / staff / day, payable vs paid
+      description: Separate from revenue and VAT. `csv=true` is available through the exports endpoint (`tips`) for payroll.
+      x-roles: [admin, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: group_by, in: query, schema: { type: string, enum: [stand, staff, day], default: stand } }
+      responses:
+        '200': { description: Report., content: { application/json: { schema: { $ref: '#/components/schemas/TipsReport' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /organizers/{organizer_id}/reports/redemption-volume:
+    get:
+      tags: [Reports]
+      operationId: getRedemptionVolume
+      summary: Rolling 12-month token redemption volume (PSD2 limited-network threshold)
+      description: Warn at EUR 800 000, flag at EUR 1 000 000 (PSD2 art. 37(2) notification). Across all events of the organizer, training excluded.
+      x-roles: [admin, auditor]
+      parameters: [{ $ref: '#/components/parameters/OrganizerId' }]
+      responses:
+        '200': { description: Volume., content: { application/json: { schema: { $ref: '#/components/schemas/RedemptionVolume' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /events/{event_id}/exports/{dataset}:
+    get:
+      tags: [Reports]
+      operationId: exportCsv
+      summary: CSV export (every export is logged)
+      description: |
+        UTF-8, `;` separator, header row, amounts as integers (cents/tokens), timestamps UTC. Datasets: `journal` and `postings`
+        (with `prev_hash`/`hash`, input of the offline verification tool; free-text and personal data absent; tag UIDs appear only
+        as `HMAC-SHA256(instance pepper, uid)`), `orders`, `order_lines`, `topups`, `cashouts`, `tips`, `tips_payouts`,
+        `vat_daily` (daily totals by VAT rate, e-reporting feed), `fec` (France, 18 columns, [À VALIDER]), `accounting`
+        (generic, account mapping configurable), `z_reports`, `flags`. Training data is never exported unless `include_training=true`.
+      x-roles: [admin, auditor]
+      parameters:
+        - { $ref: '#/components/parameters/EventId' }
+        - { name: dataset, in: path, required: true, schema: { type: string, enum: [journal, postings, orders, order_lines, topups, cashouts, tips, tips_payouts, vat_daily, fec, accounting, z_reports, flags] } }
+        - { name: include_training, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: CSV file.
+          headers: { Content-Disposition: { schema: { type: string }, description: 'attachment; filename="<event>-<dataset>.csv"' } }
+          content: { text/csv: { schema: { type: string }, example: "seq;journal_id;kind;occurred_at;prev_hash;hash\n1;0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b;topup;2026-07-18T14:03:22.123Z;ab..;cd..\n" } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    deviceAuth:
+      type: http
+      scheme: bearer
+      description: Opaque device token (`dvc_...`) obtained at enrolment. Identifies the device (event, stand, training flag).
+    staffAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Staff JWT from `POST /auth/login` (12 h). Claims `sub`, `did`, `eid`, `sid`, `role`, `trn`, `exp`.
+  headers:
+    IdempotentReplayed:
+      description: '`true` when the response replays an earlier request with the same `client_tx_id`.'
+      schema: { type: string, enum: ['true'] }
+  parameters:
+    OrganizerId: { name: organizer_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    EventId: { name: event_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    StaffId: { name: staff_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    StandId: { name: stand_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    ItemId: { name: item_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    OrderId: { name: order_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    SessionId: { name: session_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    JournalId: { name: journal_id, in: path, required: true, schema: { $ref: '#/components/schemas/Uuid' } }
+    TagCode: { name: tag_code, in: path, required: true, schema: { $ref: '#/components/schemas/TagCode' } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    Cursor: { name: cursor, in: query, description: Opaque `next_cursor` of the previous page., schema: { type: string, maxLength: 512 } }
+
+  responses:
+    BadRequest:
+      description: Malformed request (`VALIDATION_ERROR`; `details.fields` lists problems).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: VALIDATION_ERROR, message: Invalid request body, request_id: req_01J, retryable: false, details: { fields: [{ path: lines/0/qty, issue: must be >= 1 }] } } } }
+    Unauthorized:
+      description: Missing/invalid/expired credentials (`UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_CREDENTIALS`, `DEVICE_REVOKED`).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: TOKEN_EXPIRED, message: 'Session expired, log in again', request_id: req_01J, retryable: false } } }
+    Forbidden:
+      description: Authenticated but not allowed (`FORBIDDEN`, `STAND_MISMATCH`).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: FORBIDDEN, message: Role vendor cannot perform this operation, request_id: req_01J, retryable: false } } }
+    NotFound:
+      description: Resource not found (`NOT_FOUND`, `TAG_NOT_FOUND`, `EVENT_NOT_FOUND`).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: TAG_NOT_FOUND, message: Unknown tag, request_id: req_01J, retryable: false } } }
+    Conflict:
+      description: Business conflict with current state (see `code`, e.g. `INSUFFICIENT_BALANCE`, `TAG_UID_MISMATCH`, `DUPLICATE_TX`, `PRICE_MISMATCH`, `EVENT_NOT_OPEN`, `ALREADY_REVERSED`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            insufficient:
+              value: { code: INSUFFICIENT_BALANCE, message: Balance too low, request_id: req_01J, retryable: false, details: { balance_tokens: 2, required_tokens: 6 } }
+            uid:
+              value: { code: TAG_UID_MISMATCH, message: Chip UID does not match the enrolled tag, request_id: req_01J, retryable: false }
+            price:
+              value: { code: PRICE_MISMATCH, message: 'Prices changed, refresh the catalog', request_id: req_01J, retryable: false, details: { catalog_version: 43, total_tokens: 7 } }
+            duplicate:
+              value: { code: DUPLICATE_TX, message: client_tx_id already used with a different request, request_id: req_01J, retryable: false }
+    Locked:
+      description: Tag/wallet blocked (`TAG_BLOCKED`).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: TAG_BLOCKED, message: This tag is blocked, request_id: req_01J, retryable: false } } }
+    Unprocessable:
+      description: Semantically invalid (`INVALID_AMOUNT`, `LIMIT_EXCEEDED`, `TIP_TOO_HIGH`, `AGE_CHECK_REQUIRED`, `ITEM_NOT_FOUND`, `EXTERNAL_REF_REQUIRED`, `VAT_RATE_NOT_FOUND`, ...).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { code: INVALID_AMOUNT, message: amount_cents must be a multiple of 200, request_id: req_01J, retryable: false } } }
+    PayloadTooLarge:
+      description: Batch larger than 200 items (`PAYLOAD_TOO_LARGE`).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RateLimited:
+      description: Too many requests (`RATE_LIMITED`, `PIN_LOCKED`). Honour `Retry-After`.
+      headers: { Retry-After: { schema: { type: integer }, description: 'Seconds.' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    ServiceUnavailable:
+      description: Temporarily unavailable (`SERVICE_UNAVAILABLE`); retry with back-off.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    # ───────── primitives ─────────
+    Uuid: { type: string, format: uuid, examples: ['0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5b'] }
+    TagCode:
+      type: string
+      pattern: '^[0-9A-HJKMNP-TV-Z]{19}[0G]$'
+      description: 96 random bits, Crockford base32 upper-case, 20 chars (last char is `0` or `G`).
+      examples: ['0123456789ABCDEFGHJ0']
+    TagUid:
+      type: string
+      pattern: '^([0-9A-F]{8}|[0-9A-F]{14}|[0-9A-F]{20})$'
+      description: Chip hardware UID, upper-case hex without separators, in ISO 14443 byte order as returned by Android `Tag.getId()` (4, 7 or 10 bytes).
+      examples: ['04A1B2C3D4E5F6']
+    Country: { type: string, enum: [BE, FR] }
+    ConsumptionMode: { type: string, enum: [on_site, takeaway] }
+    VatCategoryCode: { type: string, enum: [FOOD, DRINK_SOFT, ALCOHOL, ICE_CREAM, MERCH, ZERO] }
+    Role: { type: string, enum: [admin, cashier, vendor, auditor] }
+    Cents: { type: integer, format: int64, minimum: 0, description: 'Euro cents.' }
+    SignedCents: { type: integer, format: int64, description: 'Euro cents, may be negative.' }
+    Tokens: { type: integer, format: int64, minimum: 0, description: 'Whole tokens.' }
+    PaymentMethod: { type: string, enum: [cash, sumup_card, sumup_online, wero, bancontact, promo, other], description: '`bancontact` covers Bancontact/Payconiq. `promo` = free tokens (admin only).' }
+    ReasonCode:
+      type: string
+      enum: [customer_request, cashier_error, vendor_error, duplicate, chargeback, lost_tag, psp_failed, event_cancelled, tag_replacement, event_close, other]
+      description: Coded reason stored in the hashed ledger. Free text is never accepted there.
+    LocalizedNames:
+      type: object
+      description: Optional translations; keys are BCP-47 language codes limited to fr, nl, en.
+      properties: { fr: { type: string, maxLength: 100 }, nl: { type: string, maxLength: 100 }, en: { type: string, maxLength: 100 } }
+      additionalProperties: false
+    Page:
+      type: object
+      required: [next_cursor]
+      properties: { next_cursor: { type: [string, 'null'], description: 'Null on the last page.' } }
+    TagRef:
+      type: object
+      description: The tag as read by the terminal.
+      required: [tag_code, uid]
+      properties: { tag_code: { $ref: '#/components/schemas/TagCode' }, uid: { $ref: '#/components/schemas/TagUid' } }
+    ClientMeta:
+      type: object
+      description: Common fields of every ledger write.
+      properties:
+        client_created_at: { type: string, format: date-time, description: 'Device time of the action (UTC). Required for offline items.' }
+        provisional_ref: { type: string, maxLength: 40, description: 'Device-local number printed on an offline receipt; not a legal number.' }
+    Health:
+      type: object
+      required: [status, server_time, version]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        server_time: { type: string, format: date-time }
+        version: { type: string }
+        min_client_contract: { type: string }
+
+    # ───────── errors ─────────
+    ErrorCode:
+      type: string
+      description: |
+        Stable machine codes (HTTP status in brackets).
+        400 VALIDATION_ERROR | 401 UNAUTHENTICATED, TOKEN_EXPIRED, INVALID_CREDENTIALS, DEVICE_REVOKED |
+        403 FORBIDDEN, STAND_MISMATCH | 404 NOT_FOUND, TAG_NOT_FOUND, EVENT_NOT_FOUND |
+        409 DUPLICATE_TX, TAG_UID_MISMATCH, TAG_NOT_ACTIVE, TAG_ALREADY_ENROLLED, INSUFFICIENT_BALANCE, PRICE_MISMATCH,
+        ITEM_UNAVAILABLE, EVENT_NOT_OPEN, EVENT_CLOSED, EVENT_FIELD_LOCKED, EXTERNAL_REF_ALREADY_USED, REFUND_EXCEEDS_ORIGINAL,
+        REFUND_WINDOW_CLOSED, REFUND_METHOD_LIMIT, ALREADY_REVERSED, REVERSAL_NOT_ALLOWED, Z_ALREADY_SEALED,
+        PENDING_OFFLINE_OPERATIONS, CASH_VARIANCE_UNACKNOWLEDGED, TIPS_OUTSTANDING, CLOSE_PRECONDITION_FAILED,
+        SESSION_ALREADY_OPEN, SESSION_CLOSED, TRAINING_MODE_MISMATCH |
+        410 ENROLLMENT_CODE_INVALID | 413 PAYLOAD_TOO_LARGE |
+        422 INVALID_AMOUNT, LIMIT_EXCEEDED, TIP_TOO_HIGH, TIP_DISABLED, AGE_CHECK_REQUIRED, ITEM_NOT_FOUND, EXTERNAL_REF_REQUIRED,
+        VAT_RATE_NOT_FOUND, OFFLINE_NOT_ALLOWED |
+        423 TAG_BLOCKED | 429 RATE_LIMITED, PIN_LOCKED | 500 INTERNAL_ERROR, LEDGER_INTEGRITY_ERROR | 503 SERVICE_UNAVAILABLE.
+        New codes may be added; clients must treat unknown codes by HTTP class.
+      enum:
+        - VALIDATION_ERROR
+        - UNAUTHENTICATED
+        - TOKEN_EXPIRED
+        - INVALID_CREDENTIALS
+        - DEVICE_REVOKED
+        - FORBIDDEN
+        - STAND_MISMATCH
+        - NOT_FOUND
+        - TAG_NOT_FOUND
+        - EVENT_NOT_FOUND
+        - DUPLICATE_TX
+        - TAG_UID_MISMATCH
+        - TAG_NOT_ACTIVE
+        - TAG_ALREADY_ENROLLED
+        - INSUFFICIENT_BALANCE
+        - PRICE_MISMATCH
+        - ITEM_UNAVAILABLE
+        - EVENT_NOT_OPEN
+        - EVENT_CLOSED
+        - EVENT_FIELD_LOCKED
+        - EXTERNAL_REF_ALREADY_USED
+        - REFUND_EXCEEDS_ORIGINAL
+        - REFUND_WINDOW_CLOSED
+        - REFUND_METHOD_LIMIT
+        - ALREADY_REVERSED
+        - REVERSAL_NOT_ALLOWED
+        - Z_ALREADY_SEALED
+        - PENDING_OFFLINE_OPERATIONS
+        - CASH_VARIANCE_UNACKNOWLEDGED
+        - TIPS_OUTSTANDING
+        - CLOSE_PRECONDITION_FAILED
+        - SESSION_ALREADY_OPEN
+        - SESSION_CLOSED
+        - TRAINING_MODE_MISMATCH
+        - ENROLLMENT_CODE_INVALID
+        - PAYLOAD_TOO_LARGE
+        - INVALID_AMOUNT
+        - LIMIT_EXCEEDED
+        - TIP_TOO_HIGH
+        - TIP_DISABLED
+        - AGE_CHECK_REQUIRED
+        - ITEM_NOT_FOUND
+        - EXTERNAL_REF_REQUIRED
+        - VAT_RATE_NOT_FOUND
+        - OFFLINE_NOT_ALLOWED
+        - TAG_BLOCKED
+        - RATE_LIMITED
+        - PIN_LOCKED
+        - INTERNAL_ERROR
+        - LEDGER_INTEGRITY_ERROR
+        - SERVICE_UNAVAILABLE
+    Error:
+      type: object
+      required: [code, message, request_id, retryable]
+      properties:
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        message: { type: string, description: 'English, for logs/developers. Clients localise from `code`.' }
+        request_id: { type: string, description: 'Quote when reporting problems.' }
+        retryable: { type: boolean }
+        details:
+          type: object
+          additionalProperties: true
+          description: |
+            Code-specific data. INSUFFICIENT_BALANCE: `balance_tokens`, `required_tokens`. PRICE_MISMATCH: `catalog_version`,
+            `total_tokens`. PIN_LOCKED: `locked_until`. VALIDATION_ERROR: `fields[{path,issue}]`. LIMIT_EXCEEDED: `limit`, `would_be`.
+            EVENT_FIELD_LOCKED: `fields[]`. TAG_UID_MISMATCH never reveals the expected UID.
+
+    # ───────── auth ─────────
+    EnrollDeviceRequest:
+      type: object
+      required: [enrollment_code, device_name, platform]
+      properties:
+        enrollment_code: { type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{8}$' }
+        device_name: { type: string, minLength: 1, maxLength: 100 }
+        platform: { type: string, enum: [android, ios, web] }
+        app_version: { type: string, maxLength: 40 }
+    EnrollDeviceResponse:
+      type: object
+      required: [device_id, device_token, event_id, kind, training]
+      properties:
+        device_id: { $ref: '#/components/schemas/Uuid' }
+        device_token: { type: string, description: 'Shown once.' }
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        kind: { type: string, enum: [terminal, cashdesk, console] }
+        training: { type: boolean }
+    StaffPublic:
+      type: object
+      required: [id, display_name, role]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        display_name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+    LoginRequest:
+      type: object
+      required: [staff_id, pin]
+      properties:
+        staff_id: { $ref: '#/components/schemas/Uuid' }
+        pin: { type: string, pattern: '^[0-9]{4,8}$', writeOnly: true }
+    LoginResponse:
+      type: object
+      required: [access_token, expires_at, session]
+      properties:
+        access_token: { type: string, description: 'JWT.' }
+        expires_at: { type: string, format: date-time }
+        session: { $ref: '#/components/schemas/Session' }
+    Session:
+      type: object
+      required: [staff, device_id, event_id, role, training]
+      properties:
+        staff: { $ref: '#/components/schemas/StaffPublic' }
+        device_id: { $ref: '#/components/schemas/Uuid' }
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        role: { $ref: '#/components/schemas/Role' }
+        training: { type: boolean, description: 'When true the UI must show a permanent "TEST / TRAINING" banner.' }
+        server_time: { type: string, format: date-time }
+
+    # ───────── admin ─────────
+    Organizer:
+      type: object
+      required: [id, legal_name, legal_form, address, enterprise_no]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        legal_name: { type: string }
+        legal_form: { type: string, enum: [asbl_vzw, company_be, person_be, association_1901, company_fr, micro_fr, other] }
+        address: { type: string }
+        enterprise_no: { type: string, description: 'BCE/KBO number or SIREN/SIRET.' }
+        vat_no: { type: [string, 'null'] }
+        contact_email: { type: [string, 'null'], format: email }
+    EventWrite:
+      type: object
+      required: [id, organizer_id, name, country]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        organizer_id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        country: { $ref: '#/components/schemas/Country' }
+        timezone: { type: string, default: Europe/Brussels, description: 'IANA zone; defines `business_date`.' }
+        token_price_cents: { type: integer, minimum: 1, default: 200, description: 'Value of one token. Use e.g. 50 for finer price granularity (ADR 0004).' }
+        offline_cap_tokens: { type: integer, minimum: 0, default: 10 }
+        max_balance_tokens: { type: integer, minimum: 1, default: 100 }
+        max_topup_tokens: { type: integer, minimum: 1, default: 50 }
+        vat_regime: { type: string, enum: [standard, franchise, exempt_event], default: standard, description: 'franchise/exempt_event: receipts carry the legal exemption mention; VAT amounts are still stored.' }
+        voucher_type: { type: string, enum: [multi_purpose, single_purpose], default: multi_purpose }
+        single_purpose_vat_category: { oneOf: [{ $ref: '#/components/schemas/VatCategoryCode' }, { type: 'null' }], description: 'Required iff voucher_type=single_purpose.' }
+        be_gks_required: { type: boolean, default: false, description: 'BE: a certified cash register (GKS/SCE) may be required; Jeton receipts are marked "Not a fiscal ticket".' }
+        fr_cash_software_required: { type: boolean, default: false }
+        third_party_vendors_enabled: { type: boolean, const: false, default: false, description: 'Reserved. Must be false in v1 (all stands are the organizer''s own activity).' }
+        tips_enabled: { type: boolean, default: true }
+        tip_presets_tokens: { type: array, items: { type: integer, minimum: 1 }, default: [1, 2, 5], description: 'Quick-pick values; 0 is always the default and never pre-selected.' }
+        tip_max_tokens: { type: integer, minimum: 0, default: 10 }
+        tip_max_percent: { type: integer, minimum: 0, maximum: 100, default: 50 }
+        tips_payout_policy: { type: string, enum: [staff, collective_donation], default: collective_donation }
+        refundable_until: { type: [string, 'null'], format: date-time }
+        min_refund_tokens: { type: integer, minimum: 1, default: 1 }
+        expiry_at: { type: [string, 'null'], format: date-time }
+        breakage_treatment: { type: string, enum: [retain, donate, refund_later], default: retain }
+        refund_cash_limited_to_cash_topups: { type: boolean, default: true }
+        policy_version: { type: [string, 'null'], description: 'Version of the refund/expiry policy text shown on receipts, balance page and cash desk.' }
+        terms_version: { type: [string, 'null'] }
+        starts_at: { type: [string, 'null'], format: date-time }
+        ends_at: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [draft, open], default: draft, description: 'Writable states; `closed` only via the close endpoint.' }
+    Event:
+      allOf:
+        - { $ref: '#/components/schemas/EventWrite' }
+        - type: object
+          required: [catalog_version]
+          properties:
+            status: { type: string, enum: [draft, open, closed] }
+            catalog_version: { type: integer, format: int64, readOnly: true }
+            closed_at: { type: [string, 'null'], format: date-time, readOnly: true }
+            warnings: { type: array, readOnly: true, items: { type: string, enum: [SINGLE_VAT_CATEGORY_ALL_ITEMS, UNVALIDATED_VAT_RATES, NO_REFUND_POLICY, BE_GKS_REQUIRED] } }
+    CloseEventRequest:
+      type: object
+      required: [client_tx_id, tips_disposition]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        tips_disposition: { type: string, enum: [payout_done, none_outstanding, assigned_to_donation], description: 'Explicit acknowledgement; the server also checks the tips_payable balance.' }
+    CloseEventResponse:
+      type: object
+      required: [event_id, closed_at, breakage_tokens, breakage_cents, wallets_affected, final_chain_seq, final_chain_hash]
+      properties:
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        closed_at: { type: string, format: date-time }
+        breakage_treatment: { type: string, enum: [retain, donate, refund_later] }
+        breakage_tokens: { $ref: '#/components/schemas/Tokens' }
+        breakage_cents: { $ref: '#/components/schemas/Cents' }
+        wallets_affected: { type: integer }
+        final_chain_seq: { type: integer, format: int64 }
+        final_chain_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+    Staff:
+      type: object
+      required: [id, display_name, role, staff_type, active]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        display_name: { type: string, description: 'Purgeable; the ledger stores only `id`.' }
+        role: { $ref: '#/components/schemas/Role' }
+        staff_type: { type: string, enum: [employee, volunteer, vendor_staff] }
+        active: { type: boolean }
+        event_ids: { type: array, items: { $ref: '#/components/schemas/Uuid' } }
+    StaffWrite:
+      type: object
+      required: [display_name, role]
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 100 }
+        role: { $ref: '#/components/schemas/Role' }
+        staff_type: { type: string, enum: [employee, volunteer, vendor_staff], default: volunteer }
+        active: { type: boolean, default: true }
+        pin: { type: string, pattern: '^[0-9]{4,8}$', writeOnly: true }
+        event_ids: { type: array, items: { $ref: '#/components/schemas/Uuid' } }
+    CreateEnrollmentCodeRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [terminal, cashdesk, console] }
+        stand_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }], description: 'Required for terminal/cashdesk.' }
+        training: { type: boolean, default: false }
+    EnrollmentCode:
+      type: object
+      required: [code, expires_at]
+      properties:
+        code: { type: string, description: 'Shown once.' }
+        expires_at: { type: string, format: date-time }
+    Device:
+      type: object
+      required: [id, name, kind, training, enrolled_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        kind: { type: string, enum: [terminal, cashdesk, console] }
+        stand_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        platform: { type: string, enum: [android, ios, web] }
+        training: { type: boolean }
+        app_version: { type: string }
+        enrolled_at: { type: string, format: date-time }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+
+    # ───────── catalog ─────────
+    Stand:
+      type: object
+      required: [id, name, kind]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        name_i18n: { $ref: '#/components/schemas/LocalizedNames' }
+        kind: { type: string, enum: [stand, cashdesk] }
+        active: { type: boolean, default: true }
+        sort_order: { type: integer, default: 0 }
+    Category:
+      type: object
+      required: [id, name]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        name_i18n: { $ref: '#/components/schemas/LocalizedNames' }
+        active: { type: boolean, default: true }
+        sort_order: { type: integer, default: 0 }
+    Item:
+      type: object
+      required: [id, stand_id, category_id, name, price_tokens, vat_category]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { $ref: '#/components/schemas/Uuid' }
+        category_id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        name_i18n: { $ref: '#/components/schemas/LocalizedNames' }
+        price_tokens: { type: integer, minimum: 1, description: 'Integer tokens, VAT included.' }
+        price_cents: { type: integer, format: int64, readOnly: true, description: 'Display equivalent = price_tokens x token_price_cents.' }
+        vat_category: { $ref: '#/components/schemas/VatCategoryCode' }
+        default_consumption_mode: { $ref: '#/components/schemas/ConsumptionMode' }
+        min_age: { type: [integer, 'null'], minimum: 1, maximum: 99, description: 'Alcohol etc.: the sale flow forces an "age checked" confirmation.' }
+        allergens: { type: array, uniqueItems: true, items: { type: string, enum: [gluten, crustaceans, eggs, fish, peanuts, soy, milk, nuts, celery, mustard, sesame, sulphites, lupin, molluscs] } }
+        icon: { type: [string, 'null'], description: 'Icon key; shape/icon is required in addition to colour for colour-blind safety.' }
+        color: { type: [string, 'null'], pattern: '^#[0-9A-Fa-f]{6}$' }
+        active: { type: boolean, default: true }
+        sort_order: { type: integer, default: 0 }
+    VatRate:
+      type: object
+      required: [country, category_code, consumption_mode, rate_bp, valid_from, validated]
+      properties:
+        country: { $ref: '#/components/schemas/Country' }
+        category_code: { $ref: '#/components/schemas/VatCategoryCode' }
+        consumption_mode: { $ref: '#/components/schemas/ConsumptionMode' }
+        rate_bp: { type: integer, minimum: 0, maximum: 10000, description: 'Basis points: 2100 = 21 %, 550 = 5.5 %.' }
+        valid_from: { type: string, format: date }
+        valid_to: { type: [string, 'null'], format: date }
+        label: { type: string }
+        legal_code: { type: [string, 'null'], description: 'Legal mapping name, e.g. BE_FOOD_ONSITE.' }
+        validated: { type: boolean }
+        validated_by: { type: [string, 'null'] }
+    Catalog:
+      type: object
+      required: [event, catalog_version, stands, categories, items, vat_rates]
+      properties:
+        event: { $ref: '#/components/schemas/Event' }
+        catalog_version: { type: integer, format: int64 }
+        stands: { type: array, items: { $ref: '#/components/schemas/Stand' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/Category' } }
+        items: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        vat_rates: { type: array, items: { $ref: '#/components/schemas/VatRate' } }
+        generated_at: { type: string, format: date-time }
+
+    # ───────── tags ─────────
+    EnrollTagRequest:
+      type: object
+      required: [client_tx_id, uid, chip_type]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        uid: { $ref: '#/components/schemas/TagUid' }
+        chip_type: { type: string, enum: [ntag213, ntag215, ntag216, ntag424dna, mifare_ultralight, other] }
+        signature: { type: [string, 'null'], pattern: '^[0-9A-F]{64}$', description: 'NXP originality signature (READ_SIG, 32 bytes hex) when the chip supports it.' }
+    EnrollTagResponse:
+      type: object
+      required: [tag_code, ndef_url, status]
+      properties:
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        ndef_url: { type: string, format: uri, examples: ['https://jeton.example/t/0123456789ABCDEFGHJ0'] }
+        status: { type: string, enum: [pending] }
+        signature_verified: { type: [boolean, 'null'] }
+        protection:
+          type: object
+          description: |
+            NTAG21x password protection to apply after writing the NDEF message (see docs/nfc-tags.md). Null for chips without
+            PWD_AUTH. Derived server-side from the UID and a master key; never store it on the phone beyond this call.
+          properties:
+            pwd: { type: string, pattern: '^[0-9A-F]{8}$', description: '4-byte password, hex.' }
+            pack: { type: string, pattern: '^[0-9A-F]{4}$', description: '2-byte password acknowledge, hex.' }
+            auth0: { type: integer, description: 'First protected page (4 = whole user memory).' }
+            prot: { type: integer, enum: [0], description: '0 = password required for WRITE only; reading stays open so phones can read the URL.' }
+            authlim: { type: integer, description: 'Max failed password attempts (e.g. 7).' }
+    ConfirmTagRequest:
+      type: object
+      required: [client_tx_id, uid, readback_ok]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        uid: { $ref: '#/components/schemas/TagUid' }
+        readback_ok: { type: boolean, description: 'The NDEF message was read back and equals `ndef_url`.' }
+        password_protected: { type: boolean, description: 'PWD/PACK/AUTH0/ACCESS were written and verified.' }
+    TagInfo:
+      type: object
+      required: [tag_code, tag_status, wallet_status, balance_tokens]
+      properties:
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        chip_type: { type: string }
+        tag_status: { type: string, enum: [pending, active, retired] }
+        wallet_status: { type: string, enum: [new, active, blocked], description: '`new` = no wallet yet in this event.' }
+        balance_tokens: { type: integer, format: int64, description: 'Can be negative after late offline operations or reversals (flagged).' }
+        balance_cents: { type: integer, format: int64, readOnly: true, description: 'balance_tokens x token_price_cents.' }
+        wallet_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        flags: { type: array, items: { type: string }, description: 'Open flags on this wallet, e.g. NEGATIVE_BALANCE.' }
+        terms_version: { type: [string, 'null'] }
+    SetTagStatusRequest:
+      type: object
+      required: [client_tx_id, status, reason_code]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        status: { type: string, enum: [active, blocked] }
+        reason_code: { $ref: '#/components/schemas/ReasonCode' }
+    ReplaceTagRequest:
+      type: object
+      required: [client_tx_id, new_tag, reason_code]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        new_tag: { $ref: '#/components/schemas/TagRef' }
+        old_uid: { oneOf: [{ $ref: '#/components/schemas/TagUid' }, { type: 'null' }], description: 'Old chip UID when known (omitted for lost tags).' }
+        reason_code: { $ref: '#/components/schemas/ReasonCode' }
+    ReplaceTagResponse:
+      type: object
+      required: [journal_seq, moved_tokens, old_tag, new_tag]
+      properties:
+        journal_seq: { type: integer, format: int64 }
+        moved_tokens: { $ref: '#/components/schemas/Tokens' }
+        old_tag: { $ref: '#/components/schemas/TagInfo' }
+        new_tag: { $ref: '#/components/schemas/TagInfo' }
+    WalletEntry:
+      type: object
+      required: [journal_seq, kind, at, delta_tokens, balance_after_tokens]
+      properties:
+        journal_id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        kind: { type: string, enum: [topup, promo_grant, sale, order_refund, cashout, tag_replacement, reversal, breakage, adjustment] }
+        at: { type: string, format: date-time }
+        delta_tokens: { type: integer, format: int64 }
+        balance_after_tokens: { type: integer, format: int64 }
+        document_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        stand_name: { type: [string, 'null'] }
+    PublicTagPage:
+      type: object
+      required: [tag_code, balance_tokens, token_price_cents, event, recent]
+      properties:
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        status: { type: string, enum: [active, blocked, new] }
+        balance_tokens: { type: integer, format: int64 }
+        balance_cents: { type: integer, format: int64 }
+        token_price_cents: { type: integer }
+        event:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+            organizer_name: { type: string }
+            organizer_enterprise_no: { type: string }
+            policy_version: { type: [string, 'null'] }
+            refundable_until: { type: [string, 'null'], format: date-time }
+            expiry_at: { type: [string, 'null'], format: date-time }
+            terms_version: { type: [string, 'null'] }
+            privacy_url: { type: string, format: uri }
+        recent:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [at, kind, delta_tokens]
+            properties:
+              at: { type: string, format: date-time }
+              kind: { type: string, enum: [topup, promo_grant, sale, order_refund, cashout, tag_replacement, reversal] }
+              delta_tokens: { type: integer, format: int64 }
+              stand_name: { type: [string, 'null'] }
+              receipt_no: { type: [integer, 'null'], format: int64, description: 'Final legal number (relevant for receipts printed offline with a provisional number).' }
+              provisional_ref: { type: [string, 'null'] }
+              items: { type: array, items: { type: object, required: [name, qty], properties: { name: { type: string }, qty: { type: integer } } } }
+
+    # ───────── money ─────────
+    TopupRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ClientMeta' }
+        - type: object
+          required: [client_tx_id, tag, payment_method, amount_cents]
+          properties:
+            client_tx_id: { $ref: '#/components/schemas/Uuid' }
+            tag: { $ref: '#/components/schemas/TagRef' }
+            cashdesk_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }], description: 'Defaults to the device''s stand.' }
+            payment_method: { $ref: '#/components/schemas/PaymentMethod' }
+            amount_cents: { $ref: '#/components/schemas/Cents' }
+            external_ref: { type: [string, 'null'], maxLength: 200, description: 'PSP reference (SumUp transaction code, Wero/Bancontact reference). Unique per payment method. Never card data or payer names.' }
+            manual: { type: boolean, default: false, description: 'Manually confirmed payment; requires `external_ref`; the confirming staff is the caller.' }
+            terms_version: { type: [string, 'null'], description: 'T&C version shown to the guest; stored on first top-up.' }
+    Topup:
+      type: object
+      required: [id, journal_seq, tag_code, payment_method, amount_cents, tokens, token_price_cents, balance_tokens, receipt_no, business_date]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        journal_id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64, description: 'Gapless per event.' }
+        receipt_no: { type: [integer, 'null'], format: int64, description: 'Gapless per cash desk; null for training.' }
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        payment_method: { $ref: '#/components/schemas/PaymentMethod' }
+        external_ref: { type: [string, 'null'] }
+        amount_cents: { $ref: '#/components/schemas/Cents' }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+        token_price_cents: { type: integer }
+        vat_cents: { type: integer, description: '0 for multi_purpose vouchers.' }
+        balance_tokens: { type: integer, format: int64, description: 'Balance after the top-up.' }
+        business_date: { type: string, format: date }
+        training: { type: boolean }
+        created_at: { type: string, format: date-time }
+    OrderLineInput:
+      type: object
+      required: [item_id, qty]
+      properties:
+        item_id: { $ref: '#/components/schemas/Uuid' }
+        qty: { type: integer, minimum: 1, maximum: 99 }
+    OrderRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ClientMeta' }
+        - type: object
+          required: [client_tx_id, stand_id, tag, lines]
+          properties:
+            client_tx_id: { $ref: '#/components/schemas/Uuid' }
+            stand_id: { $ref: '#/components/schemas/Uuid' }
+            tag: { $ref: '#/components/schemas/TagRef' }
+            lines: { type: array, minItems: 1, maxItems: 100, items: { $ref: '#/components/schemas/OrderLineInput' } }
+            tip_tokens: { type: integer, minimum: 0, default: 0 }
+            consumption_mode: { oneOf: [{ $ref: '#/components/schemas/ConsumptionMode' }, { type: 'null' }], description: 'Per-order override of the items'' default mode.' }
+            age_check_confirmed: { type: boolean, default: false }
+            expected_total_tokens: { type: integer, minimum: 1, description: 'Items + tip as shown to the guest.' }
+            expected_catalog_version: { type: integer, format: int64 }
+    OrderLine:
+      type: object
+      required: [line_no, item_name, qty, unit_price_tokens, tokens, vat_category, consumption_mode, vat_rate_bp, gross_cents]
+      properties:
+        line_no: { type: integer }
+        item_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        item_name: { type: string, description: 'Snapshot at sale time.' }
+        qty: { type: integer }
+        unit_price_tokens: { type: integer }
+        tokens: { type: integer }
+        vat_category: { $ref: '#/components/schemas/VatCategoryCode' }
+        consumption_mode: { $ref: '#/components/schemas/ConsumptionMode' }
+        vat_rate_bp: { type: integer }
+        gross_cents: { $ref: '#/components/schemas/Cents' }
+        refund_of_line_no: { type: [integer, 'null'] }
+    VatGroup:
+      type: object
+      required: [vat_rate_bp, gross_cents, net_cents, vat_cents]
+      properties:
+        vat_rate_bp: { type: integer }
+        gross_cents: { $ref: '#/components/schemas/Cents' }
+        net_cents: { $ref: '#/components/schemas/Cents' }
+        vat_cents: { $ref: '#/components/schemas/Cents' }
+        vat_due: { type: boolean, description: 'False for single_purpose vouchers (VAT was booked at top-up).' }
+    Order:
+      type: object
+      required: [id, kind, journal_seq, stand_id, tag_code, lines, items_tokens, tip_tokens, total_tokens, gross_cents, net_cents, vat_cents, vat_groups, balance_tokens, business_date]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        kind: { type: string, enum: [sale, refund] }
+        refund_of_order_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        journal_id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        receipt_no: { type: [integer, 'null'], format: int64, description: 'Gapless per stand; assigned at ingest (offline orders get it on sync); null for training.' }
+        grand_total_cents: { type: [integer, 'null'], format: int64, description: 'Stand perpetual grand total after this order (refunds subtract).' }
+        provisional_ref: { type: [string, 'null'] }
+        stand_id: { $ref: '#/components/schemas/Uuid' }
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        lines: { type: array, items: { $ref: '#/components/schemas/OrderLine' } }
+        items_tokens: { $ref: '#/components/schemas/Tokens' }
+        tip_tokens: { $ref: '#/components/schemas/Tokens' }
+        total_tokens: { $ref: '#/components/schemas/Tokens' }
+        gross_cents: { $ref: '#/components/schemas/Cents' }
+        net_cents: { $ref: '#/components/schemas/Cents' }
+        vat_cents: { $ref: '#/components/schemas/Cents' }
+        vat_groups: { type: array, items: { $ref: '#/components/schemas/VatGroup' } }
+        consumption_mode_override: { oneOf: [{ $ref: '#/components/schemas/ConsumptionMode' }, { type: 'null' }] }
+        balance_tokens: { type: integer, format: int64, description: 'Wallet balance after the order.' }
+        flags: { type: array, items: { type: string }, description: 'Flags raised by this order (offline sync).' }
+        business_date: { type: string, format: date }
+        training: { type: boolean }
+        created_at: { type: string, format: date-time }
+      examples:
+        - id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f4a5d
+          kind: sale
+          journal_seq: 1234
+          receipt_no: 87
+          grand_total_cents: 45200
+          stand_id: 0197a1b2-7c3d-7e4f-8a9b-0c1d2e3f0001
+          tag_code: 0123456789ABCDEFGHJ0
+          lines:
+            - { line_no: 1, item_name: Pils 25cl, qty: 2, unit_price_tokens: 1, tokens: 2, vat_category: ALCOHOL, consumption_mode: on_site, vat_rate_bp: 2100, gross_cents: 400 }
+            - { line_no: 2, item_name: Frites, qty: 1, unit_price_tokens: 3, tokens: 3, vat_category: FOOD, consumption_mode: on_site, vat_rate_bp: 1200, gross_cents: 600 }
+          items_tokens: 5
+          tip_tokens: 1
+          total_tokens: 6
+          gross_cents: 1000
+          net_cents: 878
+          vat_cents: 122
+          vat_groups:
+            - { vat_rate_bp: 2100, gross_cents: 400, net_cents: 331, vat_cents: 69, vat_due: true }
+            - { vat_rate_bp: 1200, gross_cents: 600, net_cents: 536, vat_cents: 64, vat_due: true }
+          balance_tokens: 14
+          business_date: '2026-07-18'
+    RefundOrderRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ClientMeta' }
+        - type: object
+          required: [client_tx_id, reason_code]
+          properties:
+            client_tx_id: { $ref: '#/components/schemas/Uuid' }
+            reason_code: { $ref: '#/components/schemas/ReasonCode' }
+            lines:
+              type: array
+              description: Omit to refund everything still refundable.
+              items:
+                type: object
+                required: [line_no, qty]
+                properties: { line_no: { type: integer, minimum: 1 }, qty: { type: integer, minimum: 1 } }
+            include_tip: { type: boolean, default: false }
+    CashoutRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ClientMeta' }
+        - type: object
+          required: [client_tx_id, tag, method, reason_code]
+          properties:
+            client_tx_id: { $ref: '#/components/schemas/Uuid' }
+            tag: { $ref: '#/components/schemas/TagRef' }
+            tokens: { type: [integer, 'null'], minimum: 1, description: 'Null = whole balance.' }
+            method: { type: string, enum: [cash, sumup_card, sumup_online, wero, bancontact, bank_transfer, other] }
+            external_ref: { type: [string, 'null'], maxLength: 200 }
+            reason_code: { $ref: '#/components/schemas/ReasonCode' }
+            contact:
+              type: [object, 'null']
+              description: Only for bank_transfer. Encrypted at rest in a purgeable table; never in the ledger.
+              properties:
+                name: { type: string, maxLength: 100 }
+                email: { type: string, format: email }
+                iban: { type: string, maxLength: 34 }
+    Cashout:
+      type: object
+      required: [id, journal_seq, tag_code, tokens, amount_cents, method, receipt_no, balance_tokens]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        receipt_no: { type: [integer, 'null'], format: int64 }
+        tag_code: { $ref: '#/components/schemas/TagCode' }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+        amount_cents: { $ref: '#/components/schemas/Cents' }
+        method: { type: string }
+        refund_contact_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        balance_tokens: { type: integer, format: int64 }
+        business_date: { type: string, format: date }
+        training: { type: boolean }
+    OpenSessionRequest:
+      type: object
+      required: [client_tx_id, cashdesk_id, opening_float_cents]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        cashdesk_id: { $ref: '#/components/schemas/Uuid' }
+        opening_float_cents: { $ref: '#/components/schemas/Cents' }
+    CloseSessionRequest:
+      type: object
+      required: [client_tx_id, counted_breakdown]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        counted_breakdown:
+          type: object
+          description: Denomination in cents -> count, e.g. {"5000":2,"500":3,"100":7}.
+          additionalProperties: { type: integer, minimum: 0 }
+          examples: [{ '5000': 2, '500': 3, '100': 7 }]
+    CashdeskSession:
+      type: object
+      required: [id, cashdesk_id, opened_at, opening_float_cents]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        cashdesk_id: { $ref: '#/components/schemas/Uuid' }
+        opened_at: { type: string, format: date-time }
+        opening_float_cents: { $ref: '#/components/schemas/Cents' }
+        closed_at: { type: [string, 'null'], format: date-time }
+        counted_cents: { type: [integer, 'null'] }
+        expected_cents: { type: [integer, 'null'] }
+        variance_cents: { type: [integer, 'null'], description: 'counted - expected (negative = short).' }
+        variance_acknowledged: { type: boolean }
+    CashMovementRequest:
+      allOf:
+        - { $ref: '#/components/schemas/ClientMeta' }
+        - type: object
+          required: [client_tx_id, cashdesk_id, movement, amount_cents, reason_code]
+          properties:
+            client_tx_id: { $ref: '#/components/schemas/Uuid' }
+            cashdesk_id: { $ref: '#/components/schemas/Uuid' }
+            session_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+            movement: { type: string, enum: [float_in, pay_in, pay_out, drop] }
+            amount_cents: { type: integer, minimum: 1 }
+            reason_code: { $ref: '#/components/schemas/ReasonCode' }
+    CashMovement:
+      type: object
+      required: [id, journal_seq, movement, amount_cents]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        movement: { type: string, enum: [float_in, pay_in, pay_out, drop] }
+        amount_cents: { type: integer }
+    PspSettlementRequest:
+      type: object
+      required: [client_tx_id, method, payout_ref, payout_date, lines]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        method: { type: string, enum: [sumup_card, sumup_online, wero, bancontact, other] }
+        payout_ref: { type: string, maxLength: 200 }
+        payout_date: { type: string, format: date }
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [psp_ref, gross_cents, fee_cents]
+            properties:
+              psp_ref: { type: string }
+              gross_cents: { type: integer, minimum: 1 }
+              fee_cents: { type: integer, minimum: 0 }
+    PspSettlement:
+      type: object
+      required: [id, journal_seq, gross_cents, fee_cents, net_cents, matched, unmatched]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        gross_cents: { type: integer, format: int64 }
+        fee_cents: { type: integer, format: int64 }
+        net_cents: { type: integer, format: int64 }
+        matched: { type: integer }
+        unmatched: { type: array, items: { type: object, required: [psp_ref, gross_cents], properties: { psp_ref: { type: string }, gross_cents: { type: integer } } } }
+    TipsPayoutRequest:
+      type: object
+      required: [client_tx_id, stand_id, cashdesk_id, tokens, method]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { $ref: '#/components/schemas/Uuid' }
+        cashdesk_id: { $ref: '#/components/schemas/Uuid' }
+        recipient_staff_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        tokens: { type: integer, minimum: 1 }
+        method: { type: string, enum: [cash, bank_transfer, donation] }
+        ack_ref: { type: [string, 'null'], maxLength: 100, description: 'Signature/acknowledgement reference; no personal data.' }
+    TipsPayout:
+      type: object
+      required: [id, journal_seq, tokens, amount_cents, method, tips_payable_after_tokens]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        journal_seq: { type: integer, format: int64 }
+        tokens: { type: integer }
+        amount_cents: { type: integer }
+        method: { type: string }
+        tips_payable_after_tokens: { type: integer, format: int64 }
+
+    # ───────── ledger ─────────
+    Posting:
+      type: object
+      required: [line_no, account_code, unit, amount]
+      properties:
+        line_no: { type: integer }
+        account_id: { $ref: '#/components/schemas/Uuid' }
+        account_code: { type: string, examples: ['tag:0123456789ABCDEFGHJ0'] }
+        unit: { type: string, enum: [TOKEN, EUR_CENTS] }
+        amount: { type: integer, format: int64, description: '+debit / -credit; each unit sums to zero per journal.' }
+    JournalEntry:
+      type: object
+      required: [id, seq, kind, client_tx_id, occurred_at, effective_at, prev_hash, hash, postings]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        seq: { type: integer, format: int64 }
+        kind: { type: string, enum: [topup, promo_grant, sale, order_refund, cashout, tag_replacement, reversal, breakage, adjustment, tips_payout, cash_movement, cash_variance, psp_settlement] }
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        device_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        staff_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        offline: { type: boolean }
+        training: { type: boolean }
+        client_created_at: { type: [string, 'null'], format: date-time }
+        occurred_at: { type: string, format: date-time }
+        effective_at: { type: string, format: date-time }
+        reverses_journal_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        reason_code: { oneOf: [{ $ref: '#/components/schemas/ReasonCode' }, { type: 'null' }] }
+        prev_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        postings: { type: array, items: { $ref: '#/components/schemas/Posting' } }
+        countersignatures: { type: array, items: { type: object, properties: { role: { type: string, enum: [admin, auditor] }, staff_id: { $ref: '#/components/schemas/Uuid' }, signed_at: { type: string, format: date-time } } } }
+    ReverseJournalRequest:
+      type: object
+      required: [client_tx_id, reason_code]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        reason_code: { $ref: '#/components/schemas/ReasonCode' }
+        note: { type: [string, 'null'], maxLength: 500, description: 'Free text stored in the purgeable notes table, not in the ledger. Avoid personal data.' }
+    LedgerVerification:
+      type: object
+      required: [ok, journals_checked, checks]
+      properties:
+        ok: { type: boolean }
+        journals_checked: { type: integer, format: int64 }
+        head_seq: { type: [integer, 'null'], format: int64 }
+        head_hash: { type: [string, 'null'], pattern: '^[0-9a-f]{64}$' }
+        first_bad_seq: { type: [integer, 'null'], format: int64 }
+        reason: { type: [string, 'null'] }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok]
+            properties: { name: { type: string }, ok: { type: boolean }, detail: { type: string } }
+        verified_at: { type: string, format: date-time }
+    LedgerHead:
+      type: object
+      required: [event_id, seq, hash, at]
+      properties:
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        seq: { type: integer, format: int64 }
+        hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        at: { type: string, format: date-time }
+    LedgerFlag:
+      type: object
+      required: [id, flag, created_at, resolved]
+      properties:
+        id: { type: integer, format: int64 }
+        journal_id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        flag: { type: string, enum: [NEGATIVE_BALANCE, OFFLINE_CAP_EXCEEDED, TAG_UID_MISMATCH, TAG_BLOCKED_AT_SYNC, LATE_AFTER_CLOSE, CLOCK_SKEW, ADJUSTMENT_AFTER_CLOSE] }
+        detail: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        resolved: { type: boolean }
+        resolved_at: { type: [string, 'null'], format: date-time }
+
+    # ───────── sync ─────────
+    SyncRefundPayload:
+      allOf:
+        - { $ref: '#/components/schemas/RefundOrderRequest' }
+        - type: object
+          required: [order_id]
+          properties: { order_id: { $ref: '#/components/schemas/Uuid' } }
+    SyncItem:
+      type: object
+      required: [type, staff_id, payload]
+      properties:
+        type: { type: string, enum: [order, order_refund, cashout, cash_movement], description: 'Top-ups and tag operations are not accepted offline (`OFFLINE_NOT_ALLOWED`).' }
+        staff_id: { $ref: '#/components/schemas/Uuid' }
+        provisional_ref: { type: string, maxLength: 40 }
+        payload:
+          description: The body of the corresponding online endpoint (`order` -> POST /orders, `order_refund` -> POST /orders/{id}/refunds with `order_id`, `cashout` -> POST /cashouts, `cash_movement` -> POST /cash-movements). `client_created_at` is required.
+          oneOf:
+            - { $ref: '#/components/schemas/OrderRequest' }
+            - { $ref: '#/components/schemas/SyncRefundPayload' }
+            - { $ref: '#/components/schemas/CashoutRequest' }
+            - { $ref: '#/components/schemas/CashMovementRequest' }
+    SyncBatchRequest:
+      type: object
+      required: [batch_id, items]
+      properties:
+        batch_id: { $ref: '#/components/schemas/Uuid' }
+        items: { type: array, minItems: 1, maxItems: 200, items: { $ref: '#/components/schemas/SyncItem' } }
+    SyncItemResult:
+      type: object
+      required: [client_tx_id, status]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        status: { type: string, enum: [applied, duplicate, rejected] }
+        result: { description: Created resource (Order / Cashout / CashMovement) for applied and duplicate items., type: object, additionalProperties: true }
+        flags: { type: array, items: { type: string } }
+        error: { $ref: '#/components/schemas/Error' }
+    SyncBatchResponse:
+      type: object
+      required: [batch_id, results, server_time]
+      properties:
+        batch_id: { $ref: '#/components/schemas/Uuid' }
+        server_time: { type: string, format: date-time }
+        results: { type: array, items: { $ref: '#/components/schemas/SyncItemResult' } }
+
+    # ───────── receipts & reports ─────────
+    Receipt:
+      type: object
+      required: [document_type, document_id, duplicata, issued_by, event, totals]
+      properties:
+        document_type: { type: string, enum: [order, topup, cashout] }
+        document_id: { $ref: '#/components/schemas/Uuid' }
+        receipt_no: { type: [integer, 'null'], format: int64 }
+        provisional_ref: { type: [string, 'null'] }
+        duplicata: { type: boolean, description: 'True from the second print on: render "DUPLICATA".' }
+        print_no: { type: integer, description: '1 = original.' }
+        training: { type: boolean, description: 'Render "TEST" and no legal number.' }
+        issued_by:
+          type: object
+          required: [legal_name, enterprise_no]
+          properties: { legal_name: { type: string }, enterprise_no: { type: string }, vat_no: { type: [string, 'null'] }, address: { type: string } }
+        event: { type: object, required: [name], properties: { name: { type: string }, stand_name: { type: string } } }
+        at: { type: string, format: date-time }
+        legal_mentions: { type: array, items: { type: string }, description: 'Pre-translated mentions to print (VAT regime exemptions, "bon multi-usage - pas de TVA a l''emission", "Not a fiscal ticket", refund/expiry policy summary).' }
+        lines: { type: array, items: { $ref: '#/components/schemas/OrderLine' } }
+        vat_groups: { type: array, items: { $ref: '#/components/schemas/VatGroup' } }
+        totals:
+          type: object
+          required: [tokens]
+          properties:
+            tokens: { type: integer }
+            gross_cents: { type: integer }
+            tip_tokens: { type: integer, description: 'Printed separately, excluded from VAT.' }
+            amount_cents: { type: integer }
+            payment_method: { type: string }
+        balance_after_tokens: { type: [integer, 'null'] }
+    SealZRequest:
+      type: object
+      required: [client_tx_id, stand_id, business_date]
+      properties:
+        client_tx_id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { $ref: '#/components/schemas/Uuid' }
+        business_date: { type: string, format: date }
+    ZReport:
+      type: object
+      required: [event_id, stand_id, business_date, sealed, orders_count, gross_cents, net_cents, vat_cents, vat_groups, tips_tokens]
+      properties:
+        id: { oneOf: [{ $ref: '#/components/schemas/Uuid' }, { type: 'null' }] }
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        stand_id: { $ref: '#/components/schemas/Uuid' }
+        business_date: { type: string, format: date }
+        sealed: { type: boolean }
+        z_no: { type: [integer, 'null'], format: int64, description: 'Gapless per stand; null in previews.' }
+        z_seq: { type: [integer, 'null'], format: int64 }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        first_receipt_no: { type: [integer, 'null'], format: int64 }
+        last_receipt_no: { type: [integer, 'null'], format: int64 }
+        orders_count: { type: integer }
+        refunds_count: { type: integer }
+        refunds_gross_cents: { $ref: '#/components/schemas/Cents' }
+        gross_cents: { $ref: '#/components/schemas/SignedCents' }
+        net_cents: { $ref: '#/components/schemas/SignedCents' }
+        vat_cents: { $ref: '#/components/schemas/SignedCents' }
+        vat_groups: { type: array, items: { $ref: '#/components/schemas/VatGroup' } }
+        total_tokens: { type: integer, format: int64 }
+        tips_tokens: { type: integer, format: int64, description: 'Separate Z line; excluded from gross sales.' }
+        by_method: { type: array, description: Cash desk Z - top-ups/cash-outs per payment method., items: { type: object, properties: { payment_method: { type: string }, topups_cents: { type: integer }, cashouts_cents: { type: integer }, count: { type: integer } } } }
+        cash_reconciliation: { type: [object, 'null'], properties: { expected_cents: { type: integer }, counted_cents: { type: integer }, variance_cents: { type: integer } } }
+        grand_total_cents: { type: [integer, 'null'], format: int64, description: 'Stand perpetual cumulative gross total at sealing.' }
+        chain_seq: { type: [integer, 'null'], format: int64 }
+        chain_hash: { type: [string, 'null'] }
+        prev_hash: { type: [string, 'null'] }
+        hash: { type: [string, 'null'] }
+        sealed_at: { type: [string, 'null'], format: date-time }
+    SalesReport:
+      type: object
+      required: [group_by, rows, totals]
+      properties:
+        group_by: { type: string }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [key, qty, tokens, gross_cents, net_cents, vat_cents]
+            properties:
+              key: { type: string, description: 'Item id / category id / rate_bp / stand id / ISO hour / date.' }
+              label: { type: string }
+              qty: { type: integer }
+              tokens: { type: integer, format: int64 }
+              gross_cents: { type: integer, format: int64 }
+              net_cents: { type: integer, format: int64 }
+              vat_cents: { type: integer, format: int64 }
+        totals: { type: object, properties: { qty: { type: integer }, tokens: { type: integer }, gross_cents: { type: integer }, net_cents: { type: integer }, vat_cents: { type: integer } } }
+    VatReport:
+      type: object
+      required: [event_id, voucher_type, rows, totals]
+      properties:
+        event_id: { $ref: '#/components/schemas/Uuid' }
+        voucher_type: { type: string, enum: [multi_purpose, single_purpose] }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [business_date, vat_rate_bp, gross_cents, net_cents, vat_cents]
+            properties:
+              business_date: { type: string, format: date }
+              stand_id: { $ref: '#/components/schemas/Uuid' }
+              vat_rate_bp: { type: integer }
+              box: { type: [string, 'null'] }
+              gross_cents: { type: integer, format: int64 }
+              net_cents: { type: integer, format: int64 }
+              vat_cents: { type: integer, format: int64 }
+              promo_funded_gross_cents: { type: integer, format: int64 }
+        totals: { type: object, properties: { gross_cents: { type: integer }, net_cents: { type: integer }, vat_cents: { type: integer } } }
+    TopupsReport:
+      type: object
+      required: [by_method]
+      properties:
+        by_method:
+          type: array
+          items:
+            type: object
+            required: [payment_method, count, gross_cents, tokens]
+            properties:
+              payment_method: { type: string }
+              count: { type: integer }
+              gross_cents: { type: integer, format: int64 }
+              tokens: { type: integer, format: int64 }
+              cashouts_cents: { type: integer, format: int64 }
+              psp_fees_cents: { type: integer, format: int64 }
+              net_cents: { type: integer, format: int64 }
+              paid_out_cents: { type: integer, format: int64 }
+        unmatched_psp_lines: { type: integer }
+        cash_variance_cents: { type: integer, format: int64 }
+    LiabilityReport:
+      type: object
+      required: [as_of, outstanding_tokens, outstanding_cents, wallets_with_balance]
+      properties:
+        as_of: { type: string, format: date-time }
+        outstanding_tokens: { type: integer, format: int64 }
+        outstanding_cents: { type: integer, format: int64 }
+        wallets_with_balance: { type: integer }
+        negative_wallets: { type: integer }
+        tips_payable_tokens: { type: integer, format: int64 }
+        promo_issued_tokens: { type: integer, format: int64 }
+        promo_redeemed_tokens: { type: integer, format: int64 }
+        refunds_tokens: { type: integer, format: int64 }
+        breakage_tokens: { type: integer, format: int64, description: 'Non-VAT income after close.' }
+        breakage_cents: { type: integer, format: int64 }
+    TipsReport:
+      type: object
+      required: [group_by, rows, payable_tokens, paid_tokens]
+      properties:
+        group_by: { type: string }
+        payable_tokens: { type: integer, format: int64 }
+        paid_tokens: { type: integer, format: int64 }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [key, tip_tokens, tip_cents]
+            properties: { key: { type: string }, label: { type: string }, tip_tokens: { type: integer, format: int64 }, tip_cents: { type: integer, format: int64 }, paid_tokens: { type: integer, format: int64 } }
+    RedemptionVolume:
+      type: object
+      required: [organizer_id, redeemed_cents_12m, warn_threshold_cents, limit_threshold_cents, status]
+      properties:
+        organizer_id: { $ref: '#/components/schemas/Uuid' }
+        redeemed_cents_12m: { type: integer, format: int64 }
+        warn_threshold_cents: { type: integer, format: int64, examples: [80000000] }
+        limit_threshold_cents: { type: integer, format: int64, examples: [100000000] }
+        status: { type: string, enum: [ok, warn, limit_reached] }
