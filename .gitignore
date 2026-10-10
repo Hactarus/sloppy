@@ -27,3 +27,6 @@ android/*.keystore
 # OS / editor
 .DS_Store
 *.swp
+
+# Claude Code agent worktrees
+.claude/worktrees/
