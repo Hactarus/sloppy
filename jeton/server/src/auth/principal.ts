@@ -1,4 +1,4 @@
-import type { Role } from '../contract.js';
+import type { Operation, Role } from '../contract.js';
 
 /** Who is calling: an enrolled device, optionally with a logged-in staff member. */
 export interface Principal {
@@ -15,6 +15,9 @@ declare module 'fastify' {
   interface FastifyRequest {
     principal?: Principal;
     operationId?: string;
+  }
+  interface FastifyContextConfig {
+    op?: Operation;
   }
 }
 

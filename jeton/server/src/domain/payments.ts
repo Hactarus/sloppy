@@ -1,7 +1,6 @@
 import { inTx, lockEvent, type Row } from '../db.js';
 import { AppError } from '../errors.js';
 import type { AppCtx } from '../context.js';
-import { requestHash } from '../util/crypto.js';
 import { uuidv7 } from '../util/ids.js';
 import { Actor, loadEvent, resolveCashdesk, assertEventAcceptsWrites, runIdempotent, translateDbError } from './common.js';
 import { resolveTag, assertWalletUsable } from './tags.js';
@@ -20,13 +19,11 @@ async function dto(app: AppCtx, r: Row) {
 
 /** Step 1 validates and records the intent (event lock), step 2 calls the PSP outside any transaction, step 3 stores the checkout. */
 export async function createCheckout(app: AppCtx, a: Actor, body: z.output<typeof CheckoutRequest>) {
-  const hash = requestHash('checkout', body);
   const { intent, replayed } = await inTx(app.sql, async (tx) => {
     await lockEvent(tx, a.eventId);
     const ex = (await tx<Row[]>`SELECT * FROM payment_intents WHERE event_id = ${a.eventId} AND client_tx_id = ${body.client_tx_id}`)[0];
     if (ex) {
-      const same = Buffer.compare(requestHash('checkout', { tag: body.tag, amount_cents: body.amount_cents, client_tx_id: body.client_tx_id, cashdesk_id: ex.cashdesk_id === body.cashdesk_id ? body.cashdesk_id : undefined }), hash) === 0
-        || (ex.tag_code === body.tag.tag_code && ex.amount_cents === body.amount_cents);
+      const same = ex.tag_code === body.tag.tag_code && ex.amount_cents === body.amount_cents;
       if (!same) throw new AppError('DUPLICATE_TX', 'client_tx_id already used with a different request');
       return { intent: ex, replayed: true };
     }

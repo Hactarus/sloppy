@@ -1,0 +1,66 @@
+# Local/dev and small-event deployment: PostgreSQL 16 + one-shot migration + API.
+#   docker compose up --build            # db, migrate, api on :3000
+#   docker compose run --rm cli seed-demo
+# Secrets below are DEV defaults: override them through the environment or an .env file next to this file.
+name: jeton
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: jeton_owner
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD:-jeton_owner}
+      POSTGRES_DB: jeton
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U jeton_owner -d jeton']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports:
+      - '127.0.0.1:5432:5432'
+
+  migrate:
+    build: { context: ., dockerfile: server/Dockerfile }
+    command: ['node', 'dist/cli.js', 'migrate']
+    environment: &env
+      DATABASE_URL_OWNER: postgres://jeton_owner:${DB_OWNER_PASSWORD:-jeton_owner}@db:5432/jeton
+      DATABASE_URL: postgres://jeton_api:${DB_API_PASSWORD:-jeton_api}@db:5432/jeton
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me-0123456789abcdef}
+      TAG_MASTER_KEY: ${TAG_MASTER_KEY:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+      UID_PEPPER: ${UID_PEPPER:-dev-only-uid-pepper}
+      CONTACT_ENC_KEY: ${CONTACT_ENC_KEY:-ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-fake}
+      SUMUP_API_KEY: ${SUMUP_API_KEY:-}
+      SUMUP_MERCHANT_CODE: ${SUMUP_MERCHANT_CODE:-}
+      SUMUP_WEBHOOK_SECRET: ${SUMUP_WEBHOOK_SECRET:-dev-webhook-secret}
+    depends_on:
+      db: { condition: service_healthy }
+    restart: 'no'
+
+  api:
+    build: { context: ., dockerfile: server/Dockerfile }
+    environment:
+      <<: *env
+      NODE_ENV: development   # set to production (with real secrets) for an event
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cli:
+    profiles: ['tools']
+    build: { context: ., dockerfile: server/Dockerfile }
+    entrypoint: ['node', 'dist/cli.js']
+    environment: *env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  dbdata:
