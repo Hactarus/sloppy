@@ -1,6 +1,6 @@
 {
   "name": "@jeton/server",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Jeton API server (Fastify 5 + PostgreSQL 16)",
@@ -23,6 +23,7 @@
   "dependencies": {
     "@fastify/cors": "^11.3.1",
     "@fastify/rate-limit": "^11.2.1",
+    "@fastify/static": "^10.1.6",
     "@node-rs/argon2": "^2.2.2",
     "fastify": "^5.12.5",
     "jose": "^6.2.12",

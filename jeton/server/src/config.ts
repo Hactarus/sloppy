@@ -44,6 +44,8 @@ const schema = z.object({
   SUMUP_MERCHANT_CODE: z.string().default(''),
   SUMUP_WEBHOOK_SECRET: z.string().default('dev-webhook-secret'),
   SUMUP_RETURN_URL: z.string().default(''),
+  /** Directory of the built web app (app/dist). When set, the server also serves the PWA and /t/:tagCode (single origin). */
+  STATIC_DIR: z.string().default(''),
   APP_VERSION: z.string().default('1.0.0'),
 });
 

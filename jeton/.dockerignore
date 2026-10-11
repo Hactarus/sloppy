@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+app/android
+app/android-plugins
+release/out
+release/.cache
+.git

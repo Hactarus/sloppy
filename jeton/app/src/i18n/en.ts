@@ -9,6 +9,7 @@ export const en = {
   'banner.mock': 'MOCK API - demo data (keys 1-5 tap tags, n new tag, x clone)',
   'pill.offline': 'offline - {n} pending', 'pill.offlineEmpty': 'offline', 'pill.syncing': 'syncing...', 'pill.rejected': '{n} rejected', 'pill.pending': '{n} to sync',
   'setup.title': 'Enrol this device', 'setup.code': 'Enrolment code (8 characters)', 'setup.name': 'Device name', 'setup.go': 'Enrol',
+  'setup.server': 'Server URL', 'setup.serverHint': 'Stored on this device. Default: {url}', 'setup.badUrl': 'Invalid server URL', 'setup.demo': 'Demo mode (offline mock)', 'setup.demoHint': 'Runs a built-in fake server in memory, no network needed.', 'setup.real': 'Use a real server instead',
   'login.title': 'Who are you?', 'login.pin': 'PIN', 'login.go': 'Log in', 'login.wrong': 'Wrong PIN', 'login.reset': 'Enrol another device',
   'role.vendor': 'Waiter', 'role.cashier': 'Cashier', 'role.admin': 'Admin', 'role.auditor': 'Auditor',
   'nav.pos': 'Sell', 'nav.cashier': 'Cash desk', 'nav.enroll': 'Tags', 'nav.admin': 'Admin',

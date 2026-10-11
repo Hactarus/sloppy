@@ -2,10 +2,10 @@ import createClient, { type Middleware } from 'openapi-fetch'
 import type { paths } from './schema'
 import { storage } from './storage'
 import type { ApiError } from './types'
+import { getApiBase, getApiMode, resolveBase } from './settings'
 
 /** 'mock' (in-memory fake, default in `vite dev`) or 'real' (default in production builds). */
-const MODE = import.meta.env.VITE_API_MODE ?? (import.meta.env.DEV ? 'mock' : 'real')
-const BASE = import.meta.env.VITE_API_BASE ?? '/v1'
+const MODE = getApiMode() // runtime setting (device storage) with the build-time default; changing it reloads the app
 
 export const apiMode = MODE
 
@@ -34,10 +34,12 @@ async function appFetch(input: Request): Promise<Response> {
     if (!mockFetch) mockFetch = (await import('./mock')).mockFetch // code-split: not loaded in real mode
     return mockFetch(input)
   }
-  return fetch(input)
+  // The server URL is read per request so it can be changed at runtime.
+  const target = resolveBase(getApiBase()) + new URL(input.url).pathname.replace(/^\/v1(?=\/)/, '') + new URL(input.url).search
+  return fetch(new Request(target, input))
 }
 
-export const api = createClient<paths>({ baseUrl: new URL(BASE, globalThis.location?.origin ?? 'http://localhost').toString().replace(/\/$/, ''), fetch: appFetch as typeof fetch })
+export const api = createClient<paths>({ baseUrl: 'http://jeton.invalid/v1', fetch: appFetch as typeof fetch })
 api.use(auth)
 
 /** True for failures where the request may not have reached the server (offline, DNS, 502-504). */

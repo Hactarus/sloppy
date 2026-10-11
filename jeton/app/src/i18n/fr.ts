@@ -9,6 +9,7 @@ export const fr: Record<Key, string> = {
   'banner.mock': 'API SIMULÉE - données de demo (touches 1-5 badges, n nouveau, x copie)',
   'pill.offline': 'hors ligne - {n} en attente', 'pill.offlineEmpty': 'hors ligne', 'pill.syncing': 'synchro...', 'pill.rejected': '{n} refusées', 'pill.pending': '{n} à synchroniser',
   'setup.title': 'Enregistrer cet appareil', 'setup.code': 'Code d\'enrôlement (8 caracteres)', 'setup.name': 'Nom de l\'appareil', 'setup.go': 'Enrôler',
+  'setup.server': 'URL du serveur', 'setup.serverHint': 'Enregistrée sur cet appareil. Par défaut : {url}', 'setup.badUrl': 'URL du serveur invalide', 'setup.demo': 'Mode démo (simulation hors ligne)', 'setup.demoHint': 'Utilise un faux serveur intégré en mémoire, sans réseau.', 'setup.real': 'Utiliser un vrai serveur',
   'login.title': 'Qui etes-vous ?', 'login.pin': 'PIN', 'login.go': 'Connexion', 'login.wrong': 'PIN incorrect', 'login.reset': 'Enrôler un autre appareil',
   'role.vendor': 'Serveur', 'role.cashier': 'Caissier', 'role.admin': 'Admin', 'role.auditor': 'Auditeur',
   'nav.pos': 'Vente', 'nav.cashier': 'Caisse', 'nav.enroll': 'Badges', 'nav.admin': 'Admin',

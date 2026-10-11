@@ -1,6 +1,9 @@
-# Local/dev and small-event deployment: PostgreSQL 16 + one-shot migration + API.
-#   docker compose up --build            # db, migrate, api on :3000
-#   docker compose run --rm cli seed-demo
+# Local/dev and small-event deployment: PostgreSQL 16 + one-shot migration + API (+ web app on the same port).
+# The image is a release artifact; no registry needed:
+#   docker load -i release/out/jeton-server-0.1.0.oci.tar      # -> jeton-server:0.1.0 (linux/amd64)
+#   docker compose up -d                                       # db, migrate, api on :3000 (PWA at /, guest page at /t/<code>)
+#   docker compose run --rm cli seed-demo                      # optional demo event
+# No tarball? `docker compose up --build` builds it from server/Dockerfile instead.
 # Secrets below are DEV defaults: override them through the environment or an .env file next to this file.
 name: jeton
 services:
@@ -21,9 +24,11 @@ services:
       - '127.0.0.1:5432:5432'
 
   migrate:
+    image: jeton-server:${JETON_VERSION:-0.1.0}
     build: { context: ., dockerfile: server/Dockerfile }
-    command: ['node', 'dist/cli.js', 'migrate']
+    command: ['migrate']
     environment: &env
+      NODE_ENV: ${JETON_ENV:-development}   # set JETON_ENV=production (with real secrets) for an event
       DATABASE_URL_OWNER: postgres://jeton_owner:${DB_OWNER_PASSWORD:-jeton_owner}@db:5432/jeton
       DATABASE_URL: postgres://jeton_api:${DB_API_PASSWORD:-jeton_api}@db:5432/jeton
       JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me-0123456789abcdef}
@@ -40,10 +45,10 @@ services:
     restart: 'no'
 
   api:
+    image: jeton-server:${JETON_VERSION:-0.1.0}
     build: { context: ., dockerfile: server/Dockerfile }
     environment:
       <<: *env
-      NODE_ENV: development   # set to production (with real secrets) for an event
     ports:
       - '3000:3000'
     depends_on:
@@ -56,8 +61,10 @@ services:
 
   cli:
     profiles: ['tools']
+    image: jeton-server:${JETON_VERSION:-0.1.0}
     build: { context: ., dockerfile: server/Dockerfile }
-    entrypoint: ['node', 'dist/cli.js']
+    # entrypoint is /app/bin/jeton: `docker compose run --rm cli seed-demo|create-admin|verify-chain ...`
+    command: ['--help']
     environment: *env
     depends_on:
       migrate: { condition: service_completed_successfully }

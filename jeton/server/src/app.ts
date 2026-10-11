@@ -17,6 +17,7 @@ import { adminRoutes } from './routes/admin.js';
 import { tagRoutes } from './routes/tags.js';
 import { moneyRoutes } from './routes/money.js';
 import { ledgerRoutes } from './routes/ledger.js';
+import { registerStatic } from './static.js';
 
 export interface BuildOptions {
   cfg: Config;
@@ -90,9 +91,9 @@ export async function buildApp(o: BuildOptions): Promise<Built> {
     if (e.headers) reply.headers(e.headers);
     reply.code(e.status).send(errorBody(e, req.id));
   });
-  app.setNotFoundHandler((req, reply) => {
+  const apiNotFound = (req: { id: string }, reply: { code(n: number): { send(b: unknown): unknown } }) => {
     reply.code(404).send(errorBody(new AppError('NOT_FOUND', 'No such route'), req.id));
-  });
+  };
 
   registerAuth(app, ctx);
 
@@ -115,6 +116,9 @@ export async function buildApp(o: BuildOptions): Promise<Built> {
     { prefix: '/v1' },
   );
   app.get('/healthz', async () => ({ ok: true }));
+  app.setNotFoundHandler(
+    cfg.STATIC_DIR ? await registerStatic(app, cfg.STATIC_DIR, apiNotFound as never) : (req, reply) => apiNotFound(req, reply),
+  );
   app.addHook('onClose', async () => {
     if (!o.sql) await sql.end({ timeout: 5 });
   });

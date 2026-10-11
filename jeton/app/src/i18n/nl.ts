@@ -9,6 +9,7 @@ export const nl: Record<Key, string> = {
   'banner.mock': 'MOCK API - demodata (toetsen 1-5 tags, n nieuwe tag, x kopie)',
   'pill.offline': 'offline - {n} wachtend', 'pill.offlineEmpty': 'offline', 'pill.syncing': 'synchroniseren...', 'pill.rejected': '{n} geweigerd', 'pill.pending': '{n} te synchroniseren',
   'setup.title': 'Dit toestel registreren', 'setup.code': 'Registratiecode (8 tekens)', 'setup.name': 'Naam van het toestel', 'setup.go': 'Registreren',
+  'setup.server': 'Server-URL', 'setup.serverHint': 'Op dit toestel bewaard. Standaard: {url}', 'setup.badUrl': 'Ongeldige server-URL', 'setup.demo': 'Demomodus (offline simulatie)', 'setup.demoHint': 'Gebruikt een ingebouwde nepserver in het geheugen, geen netwerk nodig.', 'setup.real': 'Echte server gebruiken',
   'login.title': 'Wie ben jij?', 'login.pin': 'PIN', 'login.go': 'Inloggen', 'login.wrong': 'Foute PIN', 'login.reset': 'Ander toestel registreren',
   'role.vendor': 'Ober', 'role.cashier': 'Kassier', 'role.admin': 'Admin', 'role.auditor': 'Auditor',
   'nav.pos': 'Verkoop', 'nav.cashier': 'Kassa', 'nav.enroll': 'Tags', 'nav.admin': 'Admin',

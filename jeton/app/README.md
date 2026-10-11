@@ -29,7 +29,18 @@ no cookies, no storage.
 
 ## Android (Capacitor)
 Project: `android/`; in-repo Kotlin plugin: `android-plugins/nfc` (module `:jeton-nfc`, registered in `MainActivity`).
-The Android SDK was NOT available when this was written, so the Gradle build and the plugin are **unbuilt and untested on hardware**.
+Status: the Gradle build and the Kotlin plugin have **not been built yet** (Google Maven was unreachable in the authoring sandbox, see below) and nothing is tested on hardware.
+
+Runtime configuration (no rebuild per environment): the enrolment screen has a "Server URL" field (stored on the device in localStorage, default = build-time `VITE_API_BASE`)
+and a "Demo mode (offline mock)" button that switches to the in-memory mock API (`src/api/settings.ts`; tests in `settings.test.ts`).
+Note: the WebView origin is `https://localhost`, so the server must allow CORS for it and be served over https (cleartext/http LAN servers are blocked as mixed content).
+
+Getting an SDK without dl.google.com (sandbox recipe that worked for the SDK part): `crane export cimg/android:2025.12.1 - | tar -x --wildcards 'home/circleci/android-sdk*'`
+then move it to `~/android-sdk` (contains platform 36, build-tools 35.0.1/36.1.0-rc1); `echo sdk.dir=$HOME/android-sdk > android/local.properties`.
+The Gradle step still needs `maven.google.com` -> `dl.google.com/dl/android/maven2` (AGP, androidx) to be reachable.
+
+Signing a release with a real key: create `keystore.properties` (not committed) or pass `-Pandroid.injected.signing.*`; or build `assembleRelease` unsigned and run
+`apksigner sign --ks my.jks --out jeton-release.apk app-release-unsigned.apk` (after `zipalign -p 4`).
 ```sh
 export ANDROID_HOME=...        # SDK with platform 36 + build-tools; JDK 17+
 CAP=1 VITE_API_MODE=real VITE_API_BASE=https://api.example/v1 pnpm exec vite build

@@ -17,8 +17,22 @@ pnpm seed-demo                  # demo event (BE): cash desk + stands Bar / Food
 pnpm dev                        # http://localhost:3000/v1/health   (pnpm build && pnpm start for production)
 ```
 
-Docker: `cd jeton && docker compose up --build` (db + one-shot migrate + api on :3000), then `docker compose run --rm cli seed-demo`.
-(The compose file and Dockerfile were written without a Docker daemon available here and are untested.)
+Single origin: with `STATIC_DIR=../app/dist` (after `cd ../app && pnpm build`) the server also serves the PWA at `/`, the guest page `t.html`
+at `/t/<tagCode>` and an SPA fallback for other non-API paths (`/v1/*` and `/healthz` keep their JSON 404). Hashed `/assets/*` are
+`immutable`, html / `sw.js` / the manifest are `no-cache`.
+
+Docker (no registry needed): `docker load -i release/out/jeton-server-0.1.0.oci.tar && cd jeton && docker compose up -d`
+(db + one-shot migrate + api on :3000), then `docker compose run --rm cli seed-demo`. `docker compose up --build` builds the same
+image from `server/Dockerfile`. Compose and Dockerfile are untested against a real daemon (none available where they were written);
+the OCI tarball was built with `crane` and its config inspected, the tarball itself was smoke-tested (see below).
+
+## Release (`jeton/release/build.sh`)
+
+`release/build.sh` builds the web app, the server (`pnpm build`), `release/out/jeton-server-<v>.tar.gz` (dist + production node_modules +
+migrations + OpenAPI + `public/` + `bin/jeton` + `jeton.service` + `INSTALL.md` + `.env.example`), the OCI image
+`jeton-server-<v>.oci.tar` (crane `append` on `node:22-bookworm-slim` through a throw-away in-memory registry, `mutate`, `pull --format tarball`;
+linux/amd64) and `SHA256SUMS`. `release/smoke.sh` is the end-to-end check run against an extracted tarball. `bin/jeton` commands:
+`serve | migrate | create-admin | seed-demo | verify-chain | gen-secrets | version`.
 
 Nix: `cd jeton && nix develop` gives Node 22, pnpm and PostgreSQL 16 (`flake.nix`, Android tooling is commented out).
 

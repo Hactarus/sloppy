@@ -6,3 +6,5 @@ coverage/
 .dart_tool/
 build/
 app/android/app/build/
+release/out/
+release/.cache/
