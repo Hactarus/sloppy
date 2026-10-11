@@ -94,7 +94,7 @@ test/             logic + widget tests (11 + 1)
 
 | | A: React/Capacitor | B: Flutter |
 |---|---|---|
-| Web payload (measured B) | small: typical Vite PWA bundle is ~150-300 KB gzip (not measured here) | `main.dart.js` 3.3 MB (958 KB gzip) + CanvasKit wasm 7.3 MB (2.9 MB gzip) = ~3.9 MB gzip first load; build/web is 41 MB on disk (several renderer variants; only one set is downloaded). Heavy for the public guest page: serve it from variant A's tiny page or a static HTML page even if B is the terminal app |
+| Web payload (measured B) | measured: ~97 KB gzip full app (79.7 KB main + 14.8 KB i18n + 2.1 KB CSS), lazy role chunks 1.7–3.3 KB, guest page 2.4 KB | `main.dart.js` 3.3 MB (958 KB gzip) + CanvasKit wasm 7.3 MB (2.9 MB gzip) = ~3.9 MB gzip first load; build/web is 41 MB on disk (several renderer variants; only one set is downloaded). Heavy for the public guest page: serve it from variant A's tiny page or a static HTML page even if B is the terminal app |
 | Guest page | trivial, SEO/no-JS friendly, instant | works, but pays the full engine download; rendered to canvas (no text selection/accessibility parity with DOM) |
 | Android NFC | in-repo Kotlin plugin, full control of reader mode, raw commands | `nfc_manager` 4 (maintained, free): UID, NDEF, NfcA transceive - enough for the NTAG password procedure; no code to maintain in Kotlin |
 | Web NFC | same API for both variants (Chrome Android only) | same, through `dart:js_interop` bindings (~100 lines) |
