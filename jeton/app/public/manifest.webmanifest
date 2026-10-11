@@ -1,0 +1,2 @@
+{ "name": "Jeton", "short_name": "Jeton", "start_url": "./", "display": "standalone", "orientation": "portrait", "background_color": "#14213d", "theme_color": "#14213d",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }] }
