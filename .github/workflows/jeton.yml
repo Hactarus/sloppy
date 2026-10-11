@@ -1,0 +1,164 @@
+name: Jeton — server, app, Android debug APK, release
+
+on:
+  push:
+    branches: ["claude/nfc-cashless-payments-*"]
+    paths: ["jeton/**", ".github/workflows/jeton.yml"]
+    tags: ["jeton-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jeton-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+
+jobs:
+  # ── Server: typecheck + tests against a real PostgreSQL 16 ─────────────────
+  server:
+    name: Server typecheck + tests
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: jeton/server } }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # the test suite creates (and drops) its own database on this server
+      TEST_DATABASE_URL_OWNER: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: jeton/server/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # ── Web app (PWA): build + tests ────────────────────────────────────────────
+  app:
+    name: App build + tests
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: jeton/app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: jeton/app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeton-web-app
+          path: jeton/app/dist
+          if-no-files-found: error
+
+  # ── Android debug APK (Capacitor) ───────────────────────────────────────────
+  android:
+    name: Android debug APK
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: jeton/app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: jeton/app/pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platform-tools" }   # default "tools" package no longer exists
+      - uses: gradle/actions/setup-gradle@v4
+        with: { cache-read-only: false }
+      - run: pnpm install --frozen-lockfile
+      - name: Build web assets for Capacitor (relative URLs, real API mode)
+        run: |
+          pnpm gen:api
+          CAP=1 VITE_API_MODE=real pnpm exec vite build
+      - run: npx cap sync android
+      - name: Gradle assembleDebug
+        working-directory: jeton/app/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Collect APK
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/jeton/apk-out"
+          cp android/app/build/outputs/apk/debug/*.apk "$GITHUB_WORKSPACE/jeton/apk-out/jeton-terminal-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeton-android-debug-apk
+          path: jeton/apk-out/*.apk
+          if-no-files-found: error
+
+  # ── Server release tarball + OCI image (no Docker daemon needed) ────────────
+  server-package:
+    name: Server tarball + OCI image
+    needs: [server, app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/jeton-v* ]]; then echo "version=${GITHUB_REF#refs/tags/jeton-v}" >> "$GITHUB_OUTPUT"
+          else echo "version=0.1.0" >> "$GITHUB_OUTPUT"; fi
+      - name: release/build.sh
+        env: { VERSION: "${{ steps.v.outputs.version }}" }
+        run: jeton/release/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeton-server-release
+          path: |
+            jeton/release/out/jeton-server-*.tar.gz
+            jeton/release/out/jeton-server-*.oci.tar
+            jeton/release/out/SHA256SUMS
+          if-no-files-found: error
+
+  # ── GitHub release on jeton-v* tags ─────────────────────────────────────────
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/jeton-v')
+    needs: [server-package, android]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dl, pattern: "jeton-{server-release,android-debug-apk}", merge-multiple: true }
+      - name: Checksums
+        working-directory: dl
+        run: |
+          ls -l
+          # SHA256SUMS from the packaging job covers server files; extend it with the APK.
+          sha256sum jeton-terminal-debug.apk >> SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Jeton ${{ github.ref_name }}
+          files: |
+            dl/jeton-server-*.tar.gz
+            dl/jeton-server-*.oci.tar
+            dl/jeton-terminal-debug.apk
+            dl/SHA256SUMS
+          generate_release_notes: true

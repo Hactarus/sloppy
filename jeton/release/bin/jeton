@@ -1,0 +1,42 @@
+#!/bin/sh
+# Jeton server launcher.   jeton <command> [args]
+#   serve                      start the HTTP server (API + web app + guest page on one port)
+#   migrate                    apply database migrations, create/update the runtime DB role
+#   create-admin --name N --pin 123456 (--event UUID | --new-event "Name")
+#   seed-demo [--tags 20]      demo event (BE) with stands Bar / Food / Ice cream
+#   verify-chain --event UUID  verify the ledger hash chain
+#   gen-secrets                print fresh random values for the secrets of the env file
+#   version
+# Configuration comes from the environment; if $JETON_ENV_FILE (or ./.env next to this install) exists it is
+# loaded first (plain KEY=value lines, values containing spaces must be quoted).
+set -eu
+SELF=$(readlink -f "$0")
+ROOT=$(dirname "$(dirname "$SELF")")
+
+command -v node >/dev/null 2>&1 || { echo "jeton: node (>= 22) not found in PATH" >&2; exit 127; }
+
+ENV_FILE=${JETON_ENV_FILE:-}
+[ -z "$ENV_FILE" ] && [ -f "$ROOT/.env" ] && ENV_FILE="$ROOT/.env"
+if [ -n "$ENV_FILE" ]; then
+  [ -r "$ENV_FILE" ] || { echo "jeton: cannot read env file $ENV_FILE" >&2; exit 1; }
+  set -a; . "$ENV_FILE"; set +a
+fi
+
+export MIGRATIONS_DIR="${MIGRATIONS_DIR:-$ROOT/db/migrations}"
+export OPENAPI_PATH="${OPENAPI_PATH:-$ROOT/api/openapi.yaml}"
+[ -d "$ROOT/public" ] && export STATIC_DIR="${STATIC_DIR:-$ROOT/public}"
+[ -f "$ROOT/VERSION" ] && export APP_VERSION="${APP_VERSION:-$(cat "$ROOT/VERSION")}"
+
+cmd=${1:-help}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  serve)       exec node "$ROOT/dist/server.js" "$@" ;;
+  migrate|create-admin|seed-demo|verify-chain)
+               exec node "$ROOT/dist/cli.js" "$cmd" "$@" ;;
+  gen-secrets) exec node -e '
+    const r = (n) => require("node:crypto").randomBytes(n).toString("hex");
+    for (const [k, n] of [["JWT_SECRET", 32], ["TAG_MASTER_KEY", 32], ["UID_PEPPER", 16], ["CONTACT_ENC_KEY", 32], ["SUMUP_WEBHOOK_SECRET", 16]]) console.log(k + "=" + r(n));' ;;
+  version|--version) echo "jeton-server $(cat "$ROOT/VERSION" 2>/dev/null || echo dev)" ;;
+  help|-h|--help) sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//' ;;
+  *) echo "jeton: unknown command '$cmd' (try: jeton help)" >&2; exit 2 ;;
+esac

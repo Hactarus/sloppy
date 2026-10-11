@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+coverage/
+*.tsbuildinfo
+.dart_tool/
+build/
+app/android/app/build/
+release/out/
+release/.cache/

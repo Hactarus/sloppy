@@ -1,0 +1,28 @@
+# /etc/systemd/system/jeton.service  (see INSTALL.md)
+[Unit]
+Description=Jeton cashless server (API + web app)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jeton
+Group=jeton
+EnvironmentFile=/etc/jeton/jeton.env
+ExecStartPre=/opt/jeton/bin/jeton migrate
+ExecStart=/opt/jeton/bin/jeton serve
+Restart=on-failure
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
