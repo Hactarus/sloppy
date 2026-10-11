@@ -1,0 +1,7 @@
+{
+  "appId": "eu.jeton.terminal",
+  "appName": "Jeton",
+  "webDir": "dist",
+  "android": { "allowMixedContent": false },
+  "server": { "androidScheme": "https" }
+}
