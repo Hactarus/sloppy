@@ -174,7 +174,7 @@ export async function resolveFlag(app: AppCtx, a: Actor, flagId: number, note: s
     if (!f) throw new AppError('NOT_FOUND', 'Unknown flag');
     const ins = await tx<Row[]>`INSERT INTO flag_resolutions(flag_id, resolved_by, note) VALUES (${flagId}, ${a.staffId}, ${note})
                                  ON CONFLICT DO NOTHING RETURNING resolved_at`;
-    if (ins.length === 0) throw new AppError('DUPLICATE_TX', 'Flag already resolved');
+    if (ins.length === 0) throw new AppError('FLAG_ALREADY_RESOLVED', 'Flag already resolved');
     return flagDto({ ...f, resolved_at: ins[0]!.resolved_at });
   });
 }

@@ -53,7 +53,7 @@ export function groupVat(lines: { vat_rate_bp: number; gross_cents: number }[]):
     });
 }
 
-async function priceLines(tx: Q, ev: Row, body: OrderRequest, standId: string, on: string, strictItems: boolean): Promise<PricedLine[]> {
+async function priceLines(tx: Q, ev: Row, body: OrderRequest, standId: string, on: string, strictItems: boolean, priceFlags: string[]): Promise<PricedLine[]> {
   const ids = [...new Set(body.lines.map((l) => l.item_id))];
   const items = await tx<Row[]>`
     SELECT i.id, i.name, i.price_tokens, i.vat_category, i.default_consumption_mode, i.min_age, i.active, i.stand_id, i.category_id,
@@ -77,10 +77,17 @@ async function priceLines(tx: Q, ev: Row, body: OrderRequest, standId: string, o
       rateCache.set(key, rate);
     }
     n++;
-    const tokens = l.qty * it.price_tokens;
+    let unit = it.price_tokens as number;
+    if (l.unit_price_tokens !== undefined && l.unit_price_tokens !== unit) {
+      // online: the guest saw another price => PRICE_MISMATCH; offline: post with the terminal's price and flag it
+      if (strictItems) throw new AppError('PRICE_MISMATCH', 'Prices changed, refresh the catalog', { catalog_version: ev.catalog_version });
+      unit = l.unit_price_tokens;
+      if (!priceFlags.includes('OFFLINE_PRICE_MISMATCH')) priceFlags.push('OFFLINE_PRICE_MISMATCH');
+    }
+    const tokens = l.qty * unit;
     out.push({
       line_no: n, item_id: it.id, item_name: it.name, category_id: it.category_id, category_name: it.category_name, qty: l.qty,
-      unit_price_tokens: it.price_tokens, vat_category: it.vat_category, consumption_mode: mode, vat_rate_bp: rate,
+      unit_price_tokens: unit, vat_category: it.vat_category, consumption_mode: mode, vat_rate_bp: rate,
       gross_cents: tokens * ev.token_price_cents, tokens,
     });
   }
@@ -112,7 +119,8 @@ export async function executeOrder(
 
   const eff = effectiveTime(body.client_created_at ?? null);
   const on = await businessDate(tx, ev.timezone, eff.at);
-  const lines = await priceLines(tx, ev, body, body.stand_id, on, !isOffline);
+  const priceFlags: string[] = [];
+  const lines = await priceLines(tx, ev, body, body.stand_id, on, !isOffline, priceFlags);
   const items_tokens = lines.reduce((s, l) => s + l.tokens, 0);
   const tip = body.tip_tokens;
 
@@ -130,6 +138,8 @@ export async function executeOrder(
     }
   }
   const total = items_tokens + tip;
+  if (isOffline && body.expected_total_tokens !== undefined && body.expected_total_tokens !== total && !priceFlags.length) priceFlags.push('OFFLINE_PRICE_MISMATCH');
+  for (const f of priceFlags) flags.push({ flag: f, detail: { expected_total_tokens: body.expected_total_tokens ?? null, posted_total_tokens: total } });
 
   const acc = new Accounts(tx, a.eventId, a.training);
   const { walletId, account: wallet } = await acc.wallet(rt.tag.id);

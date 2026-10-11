@@ -158,7 +158,7 @@ export function verifyCsvExports(eventId: string, journalCsv: string, postingsCs
     .map((r): ChainJournal => ({
       event_id: r.event_id!, seq: Number(r.seq), id: r.journal_id!, kind: r.kind!, client_tx_id: r.client_tx_id!,
       reverses_journal_id: r.reverses_journal_id || null, device_id: r.device_id || null, staff_id: r.staff_id || null,
-      offline: r.offline === 'true', training: r.training === 'true', occurred_us: r.occurred_us!, effective_us: r.effective_us!,
+      offline: r.offline === 'true', training: r.is_training === 'true', occurred_us: r.occurred_us!, effective_us: r.effective_us!,
       reason_code: r.reason_code || null, request_hash_hex: r.request_hash || null, prev_hash_hex: r.prev_hash!, hash_hex: r.hash!,
       postings: byJournal.get(r.journal_id!) ?? [],
     }))

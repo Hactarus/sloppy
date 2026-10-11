@@ -1195,11 +1195,71 @@ export interface paths {
          *     (with `prev_hash`/`hash`, input of the offline verification tool; free-text and personal data absent; tag UIDs appear only
          *     as `HMAC-SHA256(instance pepper, uid)`), `orders`, `order_lines`, `topups`, `cashouts`, `tips`, `tips_payouts`,
          *     `vat_daily` (daily totals by VAT rate, e-reporting feed), `fec` (France, 18 columns, [À VALIDER]), `accounting`
-         *     (generic, account mapping configurable), `z_reports`, `flags`. Training data is never exported unless `include_training=true`.
+         *     (generic, account mapping configurable), `z_reports`, `flags`. Training data is never exported unless `include_training=true`, with one exception: `journal` and `postings` always contain training journals (column `is_training`), because training journals are part of the hash chain and the chain cannot be verified with gaps. The `journal` columns are `event_id;seq;journal_id;kind;client_tx_id;reverses_journal_id;device_id;staff_id;offline;is_training;occurred_at;occurred_us;effective_at;effective_us;reason_code;request_hash;prev_hash;hash`; `postings`: `journal_id;line_no;account_id;account_code;unit;amount`.
          */
         get: operations["exportCsv"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payments/checkouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a hosted online checkout (SumUp) that credits a tag when paid
+         * @description Creates a payment intent and a hosted checkout at the PSP. Show `hosted_url` (QR code / browser) to the guest. When the PSP confirms
+         *     the payment (webhook or `GET` polling) the server posts the top-up (`payment_method=sumup_online`, `external_ref` = PSP transaction)
+         *     exactly once. No card data ever reaches Jeton. Wero / Bancontact-Payconiq have no API yet: use `POST /topups` with `manual=true`.
+         */
+        post: operations["createCheckout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/payments/checkouts/{checkout_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status of an online checkout (polls the PSP and credits the tag when paid) */
+        get: operations["getCheckout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/sumup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * SumUp checkout status webhook
+         * @description Unauthenticated; protected by the secret `token` query parameter embedded in the `return_url` given to SumUp. The body is never trusted:
+         *     the checkout id is re-fetched from the SumUp API and amount/reference are verified before tokens are credited. Idempotent.
+         */
+        post: operations["sumupWebhook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1297,7 +1357,7 @@ export interface components {
          *     403 FORBIDDEN, STAND_MISMATCH | 404 NOT_FOUND, TAG_NOT_FOUND, EVENT_NOT_FOUND |
          *     409 DUPLICATE_TX, TAG_UID_MISMATCH, TAG_NOT_ACTIVE, TAG_ALREADY_ENROLLED, INSUFFICIENT_BALANCE, PRICE_MISMATCH,
          *     ITEM_UNAVAILABLE, EVENT_NOT_OPEN, EVENT_CLOSED, EVENT_FIELD_LOCKED, EXTERNAL_REF_ALREADY_USED, REFUND_EXCEEDS_ORIGINAL,
-         *     REFUND_WINDOW_CLOSED, REFUND_METHOD_LIMIT, ALREADY_REVERSED, REVERSAL_NOT_ALLOWED, Z_ALREADY_SEALED,
+         *     REFUND_WINDOW_CLOSED, REFUND_METHOD_LIMIT, ALREADY_REVERSED, REVERSAL_NOT_ALLOWED, FLAG_ALREADY_RESOLVED, Z_ALREADY_SEALED,
          *     PENDING_OFFLINE_OPERATIONS, CASH_VARIANCE_UNACKNOWLEDGED, TIPS_OUTSTANDING, CLOSE_PRECONDITION_FAILED,
          *     SESSION_ALREADY_OPEN, SESSION_CLOSED, TRAINING_MODE_MISMATCH |
          *     410 ENROLLMENT_CODE_INVALID | 413 PAYLOAD_TOO_LARGE |
@@ -1307,7 +1367,7 @@ export interface components {
          *     New codes may be added; clients must treat unknown codes by HTTP class.
          * @enum {string}
          */
-        ErrorCode: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "TOKEN_EXPIRED" | "INVALID_CREDENTIALS" | "DEVICE_REVOKED" | "FORBIDDEN" | "STAND_MISMATCH" | "NOT_FOUND" | "TAG_NOT_FOUND" | "EVENT_NOT_FOUND" | "DUPLICATE_TX" | "TAG_UID_MISMATCH" | "TAG_NOT_ACTIVE" | "TAG_ALREADY_ENROLLED" | "INSUFFICIENT_BALANCE" | "PRICE_MISMATCH" | "ITEM_UNAVAILABLE" | "EVENT_NOT_OPEN" | "EVENT_CLOSED" | "EVENT_FIELD_LOCKED" | "EXTERNAL_REF_ALREADY_USED" | "REFUND_EXCEEDS_ORIGINAL" | "REFUND_WINDOW_CLOSED" | "REFUND_METHOD_LIMIT" | "ALREADY_REVERSED" | "REVERSAL_NOT_ALLOWED" | "Z_ALREADY_SEALED" | "PENDING_OFFLINE_OPERATIONS" | "CASH_VARIANCE_UNACKNOWLEDGED" | "TIPS_OUTSTANDING" | "CLOSE_PRECONDITION_FAILED" | "SESSION_ALREADY_OPEN" | "SESSION_CLOSED" | "TRAINING_MODE_MISMATCH" | "ENROLLMENT_CODE_INVALID" | "PAYLOAD_TOO_LARGE" | "INVALID_AMOUNT" | "LIMIT_EXCEEDED" | "TIP_TOO_HIGH" | "TIP_DISABLED" | "AGE_CHECK_REQUIRED" | "ITEM_NOT_FOUND" | "EXTERNAL_REF_REQUIRED" | "VAT_RATE_NOT_FOUND" | "OFFLINE_NOT_ALLOWED" | "TAG_BLOCKED" | "RATE_LIMITED" | "PIN_LOCKED" | "INTERNAL_ERROR" | "LEDGER_INTEGRITY_ERROR" | "SERVICE_UNAVAILABLE";
+        ErrorCode: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "TOKEN_EXPIRED" | "INVALID_CREDENTIALS" | "DEVICE_REVOKED" | "FORBIDDEN" | "STAND_MISMATCH" | "NOT_FOUND" | "TAG_NOT_FOUND" | "EVENT_NOT_FOUND" | "DUPLICATE_TX" | "TAG_UID_MISMATCH" | "TAG_NOT_ACTIVE" | "TAG_ALREADY_ENROLLED" | "INSUFFICIENT_BALANCE" | "PRICE_MISMATCH" | "ITEM_UNAVAILABLE" | "EVENT_NOT_OPEN" | "EVENT_CLOSED" | "EVENT_FIELD_LOCKED" | "EXTERNAL_REF_ALREADY_USED" | "REFUND_EXCEEDS_ORIGINAL" | "REFUND_WINDOW_CLOSED" | "REFUND_METHOD_LIMIT" | "ALREADY_REVERSED" | "FLAG_ALREADY_RESOLVED" | "REVERSAL_NOT_ALLOWED" | "Z_ALREADY_SEALED" | "PENDING_OFFLINE_OPERATIONS" | "CASH_VARIANCE_UNACKNOWLEDGED" | "TIPS_OUTSTANDING" | "CLOSE_PRECONDITION_FAILED" | "SESSION_ALREADY_OPEN" | "SESSION_CLOSED" | "TRAINING_MODE_MISMATCH" | "ENROLLMENT_CODE_INVALID" | "PAYLOAD_TOO_LARGE" | "INVALID_AMOUNT" | "LIMIT_EXCEEDED" | "TIP_TOO_HIGH" | "TIP_DISABLED" | "AGE_CHECK_REQUIRED" | "ITEM_NOT_FOUND" | "EXTERNAL_REF_REQUIRED" | "VAT_RATE_NOT_FOUND" | "OFFLINE_NOT_ALLOWED" | "TAG_BLOCKED" | "RATE_LIMITED" | "PIN_LOCKED" | "INTERNAL_ERROR" | "LEDGER_INTEGRITY_ERROR" | "SERVICE_UNAVAILABLE";
         Error: {
             code: components["schemas"]["ErrorCode"];
             /** @description English, for logs/developers. Clients localise from `code`. */
@@ -1716,8 +1776,11 @@ export interface components {
             reason_code: components["schemas"]["ReasonCode"];
         };
         ReplaceTagResponse: {
-            /** Format: int64 */
-            journal_seq: number;
+            /**
+             * Format: int64
+             * @description Null when the old wallet held no tokens: nothing is moved, so no journal is posted (the old wallet is still blocked).
+             */
+            journal_seq: number | null;
             moved_tokens: components["schemas"]["Tokens"];
             old_tag: components["schemas"]["TagInfo"];
             new_tag: components["schemas"]["TagInfo"];
@@ -1831,6 +1894,8 @@ export interface components {
         OrderLineInput: {
             item_id: components["schemas"]["Uuid"];
             qty: number;
+            /** @description Price the terminal showed. Offline sync only: if it differs from the server catalog the order is posted with THIS price and flagged `OFFLINE_PRICE_MISMATCH`. Online, a difference is `PRICE_MISMATCH`. */
+            unit_price_tokens?: number;
         };
         OrderRequest: components["schemas"]["ClientMeta"] & {
             client_tx_id: components["schemas"]["Uuid"];
@@ -2117,6 +2182,25 @@ export interface components {
             /** Format: int64 */
             tips_payable_after_tokens: number;
         };
+        CheckoutRequest: {
+            client_tx_id: components["schemas"]["Uuid"];
+            tag: components["schemas"]["TagRef"];
+            cashdesk_id?: components["schemas"]["Uuid"] | null;
+            amount_cents: components["schemas"]["Cents"];
+        };
+        Checkout: {
+            id: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            status: "pending" | "paid" | "credited" | "failed" | "expired" | "credit_failed";
+            amount_cents: components["schemas"]["Cents"];
+            tag_code: components["schemas"]["TagCode"];
+            /** @description Open this URL / show as QR code for the guest. */
+            hosted_url?: string | null;
+            external_ref?: string | null;
+            /** @description Present once credited. */
+            topup?: components["schemas"]["Topup"] | null;
+            last_error?: string | null;
+        };
         Posting: {
             line_no: number;
             account_id?: components["schemas"]["Uuid"];
@@ -2197,7 +2281,7 @@ export interface components {
             id: number;
             journal_id?: components["schemas"]["Uuid"] | null;
             /** @enum {string} */
-            flag: "NEGATIVE_BALANCE" | "OFFLINE_CAP_EXCEEDED" | "TAG_UID_MISMATCH" | "TAG_BLOCKED_AT_SYNC" | "LATE_AFTER_CLOSE" | "CLOCK_SKEW" | "ADJUSTMENT_AFTER_CLOSE";
+            flag: "NEGATIVE_BALANCE" | "OFFLINE_CAP_EXCEEDED" | "TAG_UID_MISMATCH" | "TAG_BLOCKED_AT_SYNC" | "LATE_AFTER_CLOSE" | "CLOCK_SKEW" | "ADJUSTMENT_AFTER_CLOSE" | "OFFLINE_PRICE_MISMATCH";
             detail?: {
                 [key: string]: unknown;
             };
@@ -4770,6 +4854,103 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    createCheckout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay. */
+            200: {
+                headers: {
+                    "Idempotent-Replayed": components["headers"]["IdempotentReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Checkout"];
+                };
+            };
+            /** @description Checkout created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Checkout"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            423: components["responses"]["Locked"];
+        };
+    };
+    getCheckout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                checkout_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Checkout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Checkout"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    sumupWebhook: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted (also for unknown or already processed checkouts). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

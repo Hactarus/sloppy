@@ -23,7 +23,7 @@ export const OrderRequest = meta.extend({
   client_tx_id: zUuid,
   stand_id: zUuid,
   tag: zTagRef,
-  lines: z.array(z.object({ item_id: zUuid, qty: z.number().int().min(1).max(99) })).min(1).max(100),
+  lines: z.array(z.object({ item_id: zUuid, qty: z.number().int().min(1).max(99), unit_price_tokens: z.number().int().min(1).optional() })).min(1).max(100),
   tip_tokens: z.number().int().min(0).default(0),
   consumption_mode: zConsumptionMode.nullish(),
   age_check_confirmed: z.boolean().default(false),
@@ -93,6 +93,12 @@ export const ReverseJournalRequest = z.object({ client_tx_id: zUuid, reason_code
 export const CloseEventRequest = z.object({
   client_tx_id: zUuid,
   tips_disposition: z.enum(['payout_done', 'none_outstanding', 'assigned_to_donation']),
+});
+export const CheckoutRequest = z.object({
+  client_tx_id: zUuid,
+  tag: zTagRef,
+  cashdesk_id: zUuid.nullish(),
+  amount_cents: z.number().int().min(1),
 });
 export const SealZRequest = z.object({ client_tx_id: zUuid, stand_id: zUuid, business_date: zDate });
 

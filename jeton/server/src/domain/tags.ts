@@ -185,7 +185,7 @@ export async function replaceTag(
       throw new AppError('TAG_NOT_ACTIVE', 'The new tag must have an empty, active wallet');
     }
     const moved = Math.max(0, await balanceOf(tx, oldW.account.id));
-    let journalSeq = 0;
+    let journalSeq: number | null = null;
     let journalId: string | null = null;
     if (moved > 0) {
       const lines = new JournalBuilder().add(oldW.account, -moved).add(newW.account, moved).build();
@@ -206,7 +206,7 @@ export async function replaceTag(
       status: 201,
       journalId,
       body: {
-        journal_seq: journalSeq, // 0 when the old wallet had nothing to move (no journal is possible without postings)
+        journal_seq: journalSeq, // null when the old wallet had nothing to move (no journal without postings)
         moved_tokens: moved,
         old_tag: await tagInfo(tx, ev.token_price_cents, a, oldTag),
         new_tag: await tagInfo(tx, ev.token_price_cents, a, newTag),
