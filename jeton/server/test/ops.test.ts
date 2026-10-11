@@ -172,7 +172,7 @@ describe('cash desk', () => {
     const cl = await w.as('cashier').post(`/cashdesk-sessions/${s.body.id}/close`, { client_tx_id: uuidv7(), counted_breakdown: { '5000': 1, '500': 2, '100': 1 } });
     expect(cl.status, JSON.stringify(cl.body)).toBe(200);
     expect(cl.body).toMatchObject({ expected_cents: 5900, counted_cents: 6100, variance_cents: 200, variance_acknowledged: false });
-    const today = (await w.owner<{ d: string }[]>`SELECT business_date::text AS d FROM topups ORDER BY created_at DESC LIMIT 1`)[0]!.d;
+    const today = (await w.owner<{ d: string }[]>`SELECT business_date::text AS d FROM topups WHERE event_id = ${w.eventId} ORDER BY created_at DESC LIMIT 1`)[0]!.d;
     const zBlocked = await w.as('cashier').post(`/events/${w.eventId}/z-reports`, { client_tx_id: uuidv7(), stand_id: w.stands.desk, business_date: today });
     expect(zBlocked.body.code).toBe('CASH_VARIANCE_UNACKNOWLEDGED');
     expect((await w.as('cashier').post(`/cashdesk-sessions/${s.body.id}/ack`)).status).toBe(403);
@@ -183,7 +183,7 @@ describe('cash desk', () => {
     expect(zOk.body.cash_reconciliation).toMatchObject({ variance_cents: 200 });
 
     // PSP settlement: sumup_card topup (EXT-...) 1000 matched, one unknown line
-    const ref = (await w.owner<{ r: string }[]>`SELECT external_ref AS r FROM topups WHERE payment_method = 'sumup_card' AND amount_cents = 1000 LIMIT 1`)[0]!.r;
+    const ref = (await w.owner<{ r: string }[]>`SELECT external_ref AS r FROM topups WHERE event_id = ${w.eventId} AND payment_method = 'sumup_card' AND amount_cents = 1000 ORDER BY created_at LIMIT 1`)[0]!.r;
     const ps = await w.as('admin').post(`/events/${w.eventId}/psp-settlements`, {
       client_tx_id: uuidv7(), method: 'sumup_card', payout_ref: 'PAYOUT-1', payout_date: today,
       lines: [{ psp_ref: ref, gross_cents: 1000, fee_cents: 19 }, { psp_ref: 'UNKNOWN', gross_cents: 500, fee_cents: 9 }],
