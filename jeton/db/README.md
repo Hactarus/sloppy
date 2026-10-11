@@ -19,3 +19,5 @@ posting profiles, the canonical hash form, error codes (SQLSTATE `JT001`..`JT011
 | 0004_facts | topups, cashouts, orders (+lines, VAT groups), tips payouts, cash desk, PSP settlements, Z-reports, receipts log, purgeable tables |
 | 0005_views_integrity | reporting views, `ledger_verify()`, `ledger_reconcile()` |
 | 0006_grants | least-privilege grants |
+| 0007_api_support | (backend) `idempotency_keys`, `payment_intents` (online checkout), `export_log`, `devices.pending_offline_ops` |
+| 0008_flag_offline_price | (backend) ledger flag `OFFLINE_PRICE_MISMATCH` |

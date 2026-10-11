@@ -29,6 +29,8 @@ function pgBin(): string {
   if (env) return env;
   const r = spawnSync('pg_config', ['--bindir'], { encoding: 'utf8' });
   if (r.status === 0 && existsSync(join(r.stdout.trim(), 'initdb'))) return r.stdout.trim();
+  const w = spawnSync('sh', ['-c', 'command -v initdb'], { encoding: 'utf8' });
+  if (w.status === 0 && w.stdout.trim()) return join(w.stdout.trim(), '..');
   const base = '/usr/lib/postgresql';
   if (existsSync(base)) {
     const v = readdirSync(base).sort().reverse().find((d) => existsSync(join(base, d, 'bin', 'initdb')));

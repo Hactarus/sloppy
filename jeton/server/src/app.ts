@@ -40,7 +40,6 @@ export async function buildApp(o: BuildOptions): Promise<Built> {
     logger: o.logger === false ? false : { level: cfg.LOG_LEVEL, redact: ['req.headers.authorization'] },
     trustProxy: cfg.TRUST_PROXY,
     genReqId: () => 'req_' + randomBytes(8).toString('hex'),
-    disableRequestLogging: o.logger === false,
   });
   const sql = o.sql ?? createSql(cfg.DATABASE_URL, cfg.DB_POOL_MAX);
   const payments =

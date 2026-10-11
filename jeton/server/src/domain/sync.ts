@@ -63,28 +63,28 @@ export async function syncBatch(app: AppCtx, p: Principal, requestId: string, it
         deviceId: p.deviceId, deviceKind: p.deviceKind, standId: p.standId, eventId: p.eventId, training: p.training, staffId: staff.id, role: staff.role,
       };
       let out: IdemOutcome;
+      // provisional_ref is not part of the idempotency hash: an item replayed online or offline is the same request
       const withRef = <T extends { provisional_ref?: string }>(b: T): T => ({ ...b, provisional_ref: b.provisional_ref ?? item.provisional_ref });
       switch (item.type) {
         case 'order': {
-          const b = withRef(parse(OrderRequest as ZodType<z.output<typeof OrderRequest>>, item.payload, 'payload'));
+          const b = parse(OrderRequest as ZodType<z.output<typeof OrderRequest>>, item.payload, 'payload');
           out = await runIdempotent(app, a, { operation: 'order', clientTxId: b.client_tx_id, body: b }, (tx) =>
             executeOrder(tx, app, a, b, { capTracker, provisionalRef: item.provisional_ref }));
           break;
         }
         case 'order_refund': {
           const { order_id, ...rest } = parse(SyncRefund, item.payload, 'payload');
-          const b = withRef(rest);
-          out = await runIdempotent(app, a, { operation: 'order.refund:' + order_id, clientTxId: b.client_tx_id, body: b }, (tx) =>
-            executeRefund(tx, app, a, order_id, b, true));
+          out = await runIdempotent(app, a, { operation: 'order.refund:' + order_id, clientTxId: rest.client_tx_id, body: rest }, (tx) =>
+            executeRefund(tx, app, a, order_id, withRef(rest), true));
           break;
         }
         case 'cashout': {
-          const b = withRef(parse(CashoutRequest, item.payload, 'payload'));
+          const b = parse(CashoutRequest, item.payload, 'payload');
           out = await runIdempotent(app, a, { operation: 'cashout', clientTxId: b.client_tx_id, body: b }, (tx) => executeCashout(tx, app, a, b, true));
           break;
         }
         default: {
-          const b = withRef(parse(CashMovementRequest, item.payload, 'payload'));
+          const b = parse(CashMovementRequest, item.payload, 'payload');
           out = await runIdempotent(app, a, { operation: 'cash_movement', clientTxId: b.client_tx_id, body: b }, (tx) => executeCashMovement(tx, app, a, b, true));
         }
       }
