@@ -1,0 +1,358 @@
+{
+  "@@locale": "fr",
+  "appTitle": "Jeton",
+  "tokensCount": "{count, plural, =0{0 jeton} =1{1 jeton} other{{count} jetons}}",
+  "@tokensCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancel": "Annuler",
+  "ok": "OK",
+  "retry": "Réessayer",
+  "dismiss": "Ignorer",
+  "language": "Langue",
+  "menu": "Menu",
+  "logout": "Se déconnecter",
+  "online": "En ligne",
+  "offline": "Hors ligne",
+  "noData": "Aucune donnée",
+  "inactive": "inactif",
+  "trainingBanner": "TEST / FORMATION - pas d'argent réel",
+  "enrollTitle": "Enregistrer cet appareil",
+  "enrollHint": "Saisissez le code à 8 caractères de la console d'administration.",
+  "enrollCode": "Code d'enregistrement",
+  "deviceName": "Nom de l'appareil",
+  "enrollButton": "Enregistrer",
+  "demoHint": "Mode démo (sans serveur) : code DEMO2026. PIN : admin 1111, caisse 2222, bar 3333, frites 4444, audit 5555.",
+  "loginTitle": "Qui êtes-vous ?",
+  "pinTitle": "PIN de {name}",
+  "@pinTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roleAdmin": "Administrateur",
+  "roleCashier": "Caissier",
+  "roleVendor": "Vendeur",
+  "roleAuditor": "Auditeur",
+  "homeTitle": "Bonjour {name}",
+  "@homeTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "menuHome": "Accueil",
+  "menuPos": "Vendre",
+  "menuCashier": "Caisse",
+  "menuEncode": "Encoder les tags",
+  "menuAdmin": "Admin",
+  "menuQueue": "File hors ligne",
+  "pillOffline": "hors ligne · {count} en attente",
+  "@pillOffline": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillSyncing": "{count} à synchroniser",
+  "@pillSyncing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillRejected": "{count} rejetée(s)",
+  "@pillRejected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "syncNow": "Synchroniser",
+  "queueEmpty": "Rien à synchroniser.",
+  "syncFlags": "Signalé par le serveur : {flags}",
+  "@syncFlags": {
+    "placeholders": {
+      "flags": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryAll": "Tout",
+  "noCatalog": "Aucun catalogue disponible.",
+  "quantity": "Quantité",
+  "qtyLabel": "quantité {qty}",
+  "@qtyLabel": {
+    "placeholders": {
+      "qty": {
+        "type": "int"
+      }
+    }
+  },
+  "total": "Total",
+  "clear": "Vider",
+  "repeatLast": "Répéter la dernière commande",
+  "pay": "Payer",
+  "tipLabel": "Pourboire (facultatif)",
+  "tipNone": "Aucun",
+  "tapTag": "Approchez le tag du téléphone",
+  "ageCheckTitle": "Contrôle d'âge",
+  "ageCheckBody": "Confirmez avoir vérifié l'âge du client (minimum {age}).",
+  "@ageCheckBody": {
+    "placeholders": {
+      "age": {
+        "type": "int"
+      }
+    }
+  },
+  "ageChecked": "Âge vérifié",
+  "paid": "Payé",
+  "newBalance": "Nouveau solde : {tokens}",
+  "@newBalance": {
+    "placeholders": {
+      "tokens": {
+        "type": "String"
+      }
+    }
+  },
+  "receiptNo": "Ticket n° {n}",
+  "@receiptNo": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "savedOffline": "Enregistré hors ligne",
+  "savedOfflineBody": "Sera synchronisé automatiquement. Réf. {ref}",
+  "@savedOfflineBody": {
+    "placeholders": {
+      "ref": {
+        "type": "String"
+      }
+    }
+  },
+  "offlineCapLeft": "Limite hors ligne restante sur ce tag : {n}",
+  "@offlineCapLeft": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "paymentFailed": "Paiement refusé",
+  "errInsufficientBalance": "Solde insuffisant (solde {balance}, requis {required})",
+  "@errInsufficientBalance": {
+    "placeholders": {
+      "balance": {
+        "type": "String"
+      },
+      "required": {
+        "type": "String"
+      }
+    }
+  },
+  "errTagUidMismatch": "Tag non conforme - copie possible. Refusé.",
+  "errTagNotFound": "Tag inconnu",
+  "errTagBlocked": "Ce tag est bloqué",
+  "errTagNotActive": "Tag non activé",
+  "errTagAlreadyEnrolled": "Tag déjà enregistré",
+  "errPriceMismatch": "Les prix ont changé. Vérifiez le panier et réessayez.",
+  "errAgeCheck": "Contrôle d'âge requis",
+  "errTip": "Pourboire non autorisé ou trop élevé",
+  "errForbidden": "Non autorisé pour ce compte ou ce stand",
+  "errSessionExpired": "Session expirée - reconnectez-vous",
+  "errDeviceRevoked": "Cet appareil a été révoqué",
+  "errEventClosed": "L'événement n'est pas ouvert",
+  "errWrongPin": "PIN incorrect",
+  "errPinLocked": "Trop d'essais - bloqué 15 minutes",
+  "errEnrollCode": "Code invalide, expiré ou déjà utilisé",
+  "errLimit": "Limite dépassée (limite {limit}, serait {wouldBe})",
+  "@errLimit": {
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      },
+      "wouldBe": {
+        "type": "String"
+      }
+    }
+  },
+  "errRefRequired": "Référence de paiement requise",
+  "errRefUsed": "Référence de paiement déjà utilisée",
+  "errAmount": "Montant invalide",
+  "errRateLimited": "Trop de requêtes - patientez",
+  "errDuplicate": "Identifiant d'opération déjà utilisé avec d'autres données",
+  "errOfflineCap": "Limite hors ligne atteinte pour ce tag ({spent}/{cap} jetons). Reconnectez-vous.",
+  "@errOfflineCap": {
+    "placeholders": {
+      "cap": {
+        "type": "String"
+      },
+      "spent": {
+        "type": "String"
+      }
+    }
+  },
+  "errNfcUnavailable": "NFC désactivé ou indisponible sur cet appareil",
+  "errNfc": "Lecture du tag échouée - gardez-le en place et réessayez",
+  "errReadback": "Vérification d'écriture échouée",
+  "errNetwork": "Pas de connexion au serveur",
+  "errGeneric": "Une erreur est survenue ({code})",
+  "@errGeneric": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "tabTopup": "Recharge",
+  "tabCashout": "Remboursement",
+  "tapTagFirst": "Lisez un tag pour commencer",
+  "readTag": "Lire un tag",
+  "otherTag": "Autre tag",
+  "amountTokens": "Jetons",
+  "payMethod": "Mode de paiement",
+  "methodCash": "Espèces",
+  "methodSumupCard": "Carte SumUp",
+  "methodSumupOnline": "SumUp en ligne (QR)",
+  "methodWero": "Wero",
+  "methodBancontact": "Bancontact / Payconiq",
+  "extRef": "Référence du paiement",
+  "confirmTopup": "Confirmer la recharge ({amount})",
+  "@confirmTopup": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "topupDone": "+{tokens} jetons",
+  "@topupDone": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "refundAll": "Rembourser tout le solde",
+  "cashoutDone": "Remboursé {amount}",
+  "@cashoutDone": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeStart": "Démarrer",
+  "encodeStop": "Arrêter",
+  "encodeCounter": "{n} / {total}",
+  "@encodeCounter": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "encodeWaiting": "Présentez le tag suivant",
+  "encodeOk": "Tag …{code} prêt",
+  "@encodeOk": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeProtected": "protégé par mot de passe",
+  "encodeNoProtection": "pas de mot de passe (limite puce ou navigateur)",
+  "encodeWebLimit": "Mode navigateur : l'URL est écrite, mais la protection par mot de passe nécessite l'app Android.",
+  "tabCatalog": "Catalogue",
+  "tabDevices": "Appareils",
+  "tabReports": "Rapports",
+  "catalogInfo": "Catalogue v{version} · 1 jeton = {price}",
+  "@catalogInfo": {
+    "placeholders": {
+      "version": {
+        "type": "int"
+      },
+      "price": {
+        "type": "String"
+      }
+    }
+  },
+  "newEnrollCode": "Nouveau code d'enregistrement",
+  "liability": "Jetons en circulation",
+  "liabilityDetail": "{wallets} portefeuilles avec solde, {negative} négatifs",
+  "@liabilityDetail": {
+    "placeholders": {
+      "wallets": {
+        "type": "int"
+      },
+      "negative": {
+        "type": "int"
+      }
+    }
+  },
+  "topupsByMethod": "Recharges par mode",
+  "salesByItem": "Ventes par article",
+  "guestTitle": "Votre solde Jeton",
+  "guestWorth": "valeur {amount}",
+  "@guestWorth": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "guestNotFound": "Tag introuvable",
+  "guestBlocked": "Ce tag est bloqué. Merci de vous rendre à la caisse.",
+  "recentActivity": "Activité récente",
+  "guestRefundUntil": "Remboursable jusqu'au {date}",
+  "@guestRefundUntil": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestExpiry": "Jetons valables jusqu'au {date}",
+  "@guestExpiry": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestOrganizer": "Organisé par {name} ({number})",
+  "@guestOrganizer": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "number": {
+        "type": "String"
+      }
+    }
+  },
+  "policy": "Conditions",
+  "kindTopup": "Recharge",
+  "kindPromo": "Jetons offerts",
+  "kindSale": "Achat",
+  "kindRefund": "Remboursement de commande",
+  "kindCashout": "Remboursement",
+  "kindReplacement": "Tag remplacé",
+  "kindOther": "Ajustement"
+}

@@ -1,0 +1,358 @@
+{
+  "@@locale": "en",
+  "appTitle": "Jeton",
+  "tokensCount": "{count, plural, =1{1 token} other{{count} tokens}}",
+  "@tokensCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancel": "Cancel",
+  "ok": "OK",
+  "retry": "Retry",
+  "dismiss": "Dismiss",
+  "language": "Language",
+  "menu": "Menu",
+  "logout": "Log out",
+  "online": "Online",
+  "offline": "Offline",
+  "noData": "No data",
+  "inactive": "inactive",
+  "trainingBanner": "TEST / TRAINING - no real money",
+  "enrollTitle": "Enrol this device",
+  "enrollHint": "Enter the 8-character code from the admin console.",
+  "enrollCode": "Enrolment code",
+  "deviceName": "Device name",
+  "enrollButton": "Enrol",
+  "demoHint": "Demo mode (no backend): code DEMO2026. PINs: admin 1111, cashier 2222, bar 3333, fries 4444, audit 5555.",
+  "loginTitle": "Who are you?",
+  "pinTitle": "PIN for {name}",
+  "@pinTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roleAdmin": "Administrator",
+  "roleCashier": "Cashier",
+  "roleVendor": "Vendor",
+  "roleAuditor": "Auditor",
+  "homeTitle": "Hello {name}",
+  "@homeTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "menuHome": "Home",
+  "menuPos": "Sell",
+  "menuCashier": "Cash desk",
+  "menuEncode": "Encode tags",
+  "menuAdmin": "Admin",
+  "menuQueue": "Offline queue",
+  "pillOffline": "offline · {count} pending",
+  "@pillOffline": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillSyncing": "{count} to sync",
+  "@pillSyncing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillRejected": "{count} rejected",
+  "@pillRejected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "syncNow": "Sync now",
+  "queueEmpty": "Nothing waiting to sync.",
+  "syncFlags": "Server flagged: {flags}",
+  "@syncFlags": {
+    "placeholders": {
+      "flags": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryAll": "All",
+  "noCatalog": "No catalog available.",
+  "quantity": "Quantity",
+  "qtyLabel": "quantity {qty}",
+  "@qtyLabel": {
+    "placeholders": {
+      "qty": {
+        "type": "int"
+      }
+    }
+  },
+  "total": "Total",
+  "clear": "Clear",
+  "repeatLast": "Repeat last order",
+  "pay": "Pay",
+  "tipLabel": "Tip (optional)",
+  "tipNone": "No tip",
+  "tapTag": "Hold the tag to the phone",
+  "ageCheckTitle": "Age check",
+  "ageCheckBody": "Confirm you checked the customer's age (minimum {age}).",
+  "@ageCheckBody": {
+    "placeholders": {
+      "age": {
+        "type": "int"
+      }
+    }
+  },
+  "ageChecked": "Age checked",
+  "paid": "Paid",
+  "newBalance": "New balance: {tokens}",
+  "@newBalance": {
+    "placeholders": {
+      "tokens": {
+        "type": "String"
+      }
+    }
+  },
+  "receiptNo": "Receipt no. {n}",
+  "@receiptNo": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "savedOffline": "Saved offline",
+  "savedOfflineBody": "Will sync automatically. Ref. {ref}",
+  "@savedOfflineBody": {
+    "placeholders": {
+      "ref": {
+        "type": "String"
+      }
+    }
+  },
+  "offlineCapLeft": "Offline limit left on this tag: {n}",
+  "@offlineCapLeft": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "paymentFailed": "Payment failed",
+  "errInsufficientBalance": "Not enough tokens (balance {balance}, needed {required})",
+  "@errInsufficientBalance": {
+    "placeholders": {
+      "balance": {
+        "type": "String"
+      },
+      "required": {
+        "type": "String"
+      }
+    }
+  },
+  "errTagUidMismatch": "Tag does not match - possible copy. Refused.",
+  "errTagNotFound": "Unknown tag",
+  "errTagBlocked": "This tag is blocked",
+  "errTagNotActive": "Tag not activated",
+  "errTagAlreadyEnrolled": "Tag already enrolled",
+  "errPriceMismatch": "Prices changed. Check the basket and try again.",
+  "errAgeCheck": "Age check required",
+  "errTip": "Tip not allowed or too high",
+  "errForbidden": "Not allowed for this account or stand",
+  "errSessionExpired": "Session expired - log in again",
+  "errDeviceRevoked": "This device was revoked",
+  "errEventClosed": "Event is not open",
+  "errWrongPin": "Wrong PIN",
+  "errPinLocked": "Too many attempts - locked for 15 minutes",
+  "errEnrollCode": "Code invalid, expired or already used",
+  "errLimit": "Limit exceeded (limit {limit}, would be {wouldBe})",
+  "@errLimit": {
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      },
+      "wouldBe": {
+        "type": "String"
+      }
+    }
+  },
+  "errRefRequired": "Payment reference required",
+  "errRefUsed": "Payment reference already used",
+  "errAmount": "Invalid amount",
+  "errRateLimited": "Too many requests - wait a moment",
+  "errDuplicate": "Operation id already used with other data",
+  "errOfflineCap": "Offline limit reached for this tag ({spent}/{cap} tokens). Go online.",
+  "@errOfflineCap": {
+    "placeholders": {
+      "cap": {
+        "type": "String"
+      },
+      "spent": {
+        "type": "String"
+      }
+    }
+  },
+  "errNfcUnavailable": "NFC is off or unavailable on this device",
+  "errNfc": "Tag read failed - hold still and retry",
+  "errReadback": "Write verification failed",
+  "errNetwork": "No connection to the server",
+  "errGeneric": "Something went wrong ({code})",
+  "@errGeneric": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "tabTopup": "Top-up",
+  "tabCashout": "Refund",
+  "tapTagFirst": "Read a tag to start",
+  "readTag": "Read tag",
+  "otherTag": "Other tag",
+  "amountTokens": "Tokens",
+  "payMethod": "Payment method",
+  "methodCash": "Cash",
+  "methodSumupCard": "SumUp card",
+  "methodSumupOnline": "SumUp online (QR)",
+  "methodWero": "Wero",
+  "methodBancontact": "Bancontact / Payconiq",
+  "extRef": "Payment reference",
+  "confirmTopup": "Confirm top-up ({amount})",
+  "@confirmTopup": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "topupDone": "+{tokens} tokens",
+  "@topupDone": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "refundAll": "Refund whole balance",
+  "cashoutDone": "Refunded {amount}",
+  "@cashoutDone": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeStart": "Start",
+  "encodeStop": "Stop",
+  "encodeCounter": "{n} / {total}",
+  "@encodeCounter": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "encodeWaiting": "Tap the next tag",
+  "encodeOk": "Tag …{code} ready",
+  "@encodeOk": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeProtected": "password protected",
+  "encodeNoProtection": "no password set (chip or browser limit)",
+  "encodeWebLimit": "Browser mode: URL is written, but password protection needs the Android app.",
+  "tabCatalog": "Catalog",
+  "tabDevices": "Devices",
+  "tabReports": "Reports",
+  "catalogInfo": "Catalog v{version} · 1 token = {price}",
+  "@catalogInfo": {
+    "placeholders": {
+      "version": {
+        "type": "int"
+      },
+      "price": {
+        "type": "String"
+      }
+    }
+  },
+  "newEnrollCode": "New enrolment code",
+  "liability": "Outstanding tokens",
+  "liabilityDetail": "{wallets} wallets with balance, {negative} negative",
+  "@liabilityDetail": {
+    "placeholders": {
+      "wallets": {
+        "type": "int"
+      },
+      "negative": {
+        "type": "int"
+      }
+    }
+  },
+  "topupsByMethod": "Top-ups by method",
+  "salesByItem": "Sales by item",
+  "guestTitle": "Your Jeton balance",
+  "guestWorth": "worth {amount}",
+  "@guestWorth": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "guestNotFound": "Tag not found",
+  "guestBlocked": "This tag is blocked. Please see the cash desk.",
+  "recentActivity": "Recent activity",
+  "guestRefundUntil": "Refundable until {date}",
+  "@guestRefundUntil": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestExpiry": "Tokens expire {date}",
+  "@guestExpiry": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestOrganizer": "Organised by {name} ({number})",
+  "@guestOrganizer": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "number": {
+        "type": "String"
+      }
+    }
+  },
+  "policy": "Policy",
+  "kindTopup": "Top-up",
+  "kindPromo": "Free tokens",
+  "kindSale": "Purchase",
+  "kindRefund": "Order refund",
+  "kindCashout": "Refund",
+  "kindReplacement": "Tag replaced",
+  "kindOther": "Adjustment"
+}

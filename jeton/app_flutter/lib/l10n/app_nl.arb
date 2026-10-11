@@ -1,0 +1,358 @@
+{
+  "@@locale": "nl",
+  "appTitle": "Jeton",
+  "tokensCount": "{count, plural, =1{1 token} other{{count} tokens}}",
+  "@tokensCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cancel": "Annuleren",
+  "ok": "OK",
+  "retry": "Opnieuw",
+  "dismiss": "Negeren",
+  "language": "Taal",
+  "menu": "Menu",
+  "logout": "Afmelden",
+  "online": "Online",
+  "offline": "Offline",
+  "noData": "Geen gegevens",
+  "inactive": "inactief",
+  "trainingBanner": "TEST / OPLEIDING - geen echt geld",
+  "enrollTitle": "Dit toestel registreren",
+  "enrollHint": "Voer de code van 8 tekens uit de beheerconsole in.",
+  "enrollCode": "Registratiecode",
+  "deviceName": "Naam van het toestel",
+  "enrollButton": "Registreren",
+  "demoHint": "Demomodus (zonder server): code DEMO2026. PIN: beheer 1111, kassa 2222, bar 3333, frituur 4444, audit 5555.",
+  "loginTitle": "Wie ben je?",
+  "pinTitle": "PIN van {name}",
+  "@pinTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roleAdmin": "Beheerder",
+  "roleCashier": "Kassier",
+  "roleVendor": "Verkoper",
+  "roleAuditor": "Auditor",
+  "homeTitle": "Hallo {name}",
+  "@homeTitle": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "menuHome": "Start",
+  "menuPos": "Verkopen",
+  "menuCashier": "Kassa",
+  "menuEncode": "Tags coderen",
+  "menuAdmin": "Beheer",
+  "menuQueue": "Offline wachtrij",
+  "pillOffline": "offline · {count} in wachtrij",
+  "@pillOffline": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillSyncing": "{count} te synchroniseren",
+  "@pillSyncing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "pillRejected": "{count} geweigerd",
+  "@pillRejected": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "syncNow": "Nu synchroniseren",
+  "queueEmpty": "Niets te synchroniseren.",
+  "syncFlags": "Door server gemarkeerd: {flags}",
+  "@syncFlags": {
+    "placeholders": {
+      "flags": {
+        "type": "String"
+      }
+    }
+  },
+  "categoryAll": "Alles",
+  "noCatalog": "Geen catalogus beschikbaar.",
+  "quantity": "Aantal",
+  "qtyLabel": "aantal {qty}",
+  "@qtyLabel": {
+    "placeholders": {
+      "qty": {
+        "type": "int"
+      }
+    }
+  },
+  "total": "Totaal",
+  "clear": "Wissen",
+  "repeatLast": "Laatste bestelling herhalen",
+  "pay": "Betalen",
+  "tipLabel": "Fooi (optioneel)",
+  "tipNone": "Geen",
+  "tapTag": "Houd de tag tegen de telefoon",
+  "ageCheckTitle": "Leeftijdscontrole",
+  "ageCheckBody": "Bevestig dat je de leeftijd van de klant hebt gecontroleerd (minimum {age}).",
+  "@ageCheckBody": {
+    "placeholders": {
+      "age": {
+        "type": "int"
+      }
+    }
+  },
+  "ageChecked": "Leeftijd gecontroleerd",
+  "paid": "Betaald",
+  "newBalance": "Nieuw saldo: {tokens}",
+  "@newBalance": {
+    "placeholders": {
+      "tokens": {
+        "type": "String"
+      }
+    }
+  },
+  "receiptNo": "Ticket nr. {n}",
+  "@receiptNo": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "savedOffline": "Offline opgeslagen",
+  "savedOfflineBody": "Wordt automatisch gesynchroniseerd. Ref. {ref}",
+  "@savedOfflineBody": {
+    "placeholders": {
+      "ref": {
+        "type": "String"
+      }
+    }
+  },
+  "offlineCapLeft": "Resterende offline limiet op deze tag: {n}",
+  "@offlineCapLeft": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "paymentFailed": "Betaling mislukt",
+  "errInsufficientBalance": "Onvoldoende tokens (saldo {balance}, nodig {required})",
+  "@errInsufficientBalance": {
+    "placeholders": {
+      "balance": {
+        "type": "String"
+      },
+      "required": {
+        "type": "String"
+      }
+    }
+  },
+  "errTagUidMismatch": "Tag komt niet overeen - mogelijke kopie. Geweigerd.",
+  "errTagNotFound": "Onbekende tag",
+  "errTagBlocked": "Deze tag is geblokkeerd",
+  "errTagNotActive": "Tag niet geactiveerd",
+  "errTagAlreadyEnrolled": "Tag al geregistreerd",
+  "errPriceMismatch": "Prijzen gewijzigd. Controleer het mandje en probeer opnieuw.",
+  "errAgeCheck": "Leeftijdscontrole vereist",
+  "errTip": "Fooi niet toegestaan of te hoog",
+  "errForbidden": "Niet toegestaan voor dit account of deze stand",
+  "errSessionExpired": "Sessie verlopen - meld je opnieuw aan",
+  "errDeviceRevoked": "Dit toestel is ingetrokken",
+  "errEventClosed": "Evenement is niet open",
+  "errWrongPin": "Verkeerde PIN",
+  "errPinLocked": "Te veel pogingen - 15 minuten geblokkeerd",
+  "errEnrollCode": "Code ongeldig, verlopen of al gebruikt",
+  "errLimit": "Limiet overschreden (limiet {limit}, zou worden {wouldBe})",
+  "@errLimit": {
+    "placeholders": {
+      "limit": {
+        "type": "String"
+      },
+      "wouldBe": {
+        "type": "String"
+      }
+    }
+  },
+  "errRefRequired": "Betalingsreferentie vereist",
+  "errRefUsed": "Betalingsreferentie al gebruikt",
+  "errAmount": "Ongeldig bedrag",
+  "errRateLimited": "Te veel verzoeken - even wachten",
+  "errDuplicate": "Operatie-id al gebruikt met andere gegevens",
+  "errOfflineCap": "Offline limiet bereikt voor deze tag ({spent}/{cap} tokens). Ga online.",
+  "@errOfflineCap": {
+    "placeholders": {
+      "cap": {
+        "type": "String"
+      },
+      "spent": {
+        "type": "String"
+      }
+    }
+  },
+  "errNfcUnavailable": "NFC staat uit of is niet beschikbaar op dit toestel",
+  "errNfc": "Tag lezen mislukt - houd stil en probeer opnieuw",
+  "errReadback": "Schrijfverificatie mislukt",
+  "errNetwork": "Geen verbinding met de server",
+  "errGeneric": "Er ging iets mis ({code})",
+  "@errGeneric": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "tabTopup": "Opladen",
+  "tabCashout": "Terugbetaling",
+  "tapTagFirst": "Lees een tag om te starten",
+  "readTag": "Tag lezen",
+  "otherTag": "Andere tag",
+  "amountTokens": "Tokens",
+  "payMethod": "Betaalmethode",
+  "methodCash": "Contant",
+  "methodSumupCard": "SumUp kaart",
+  "methodSumupOnline": "SumUp online (QR)",
+  "methodWero": "Wero",
+  "methodBancontact": "Bancontact / Payconiq",
+  "extRef": "Betalingsreferentie",
+  "confirmTopup": "Opladen bevestigen ({amount})",
+  "@confirmTopup": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "topupDone": "+{tokens} tokens",
+  "@topupDone": {
+    "placeholders": {
+      "tokens": {
+        "type": "int"
+      }
+    }
+  },
+  "refundAll": "Volledig saldo terugbetalen",
+  "cashoutDone": "Terugbetaald {amount}",
+  "@cashoutDone": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeStart": "Starten",
+  "encodeStop": "Stoppen",
+  "encodeCounter": "{n} / {total}",
+  "@encodeCounter": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "encodeWaiting": "Houd de volgende tag erbij",
+  "encodeOk": "Tag …{code} klaar",
+  "@encodeOk": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "encodeProtected": "met wachtwoord beveiligd",
+  "encodeNoProtection": "geen wachtwoord (chip- of browserbeperking)",
+  "encodeWebLimit": "Browsermodus: de URL wordt geschreven, maar wachtwoordbeveiliging vereist de Android-app.",
+  "tabCatalog": "Catalogus",
+  "tabDevices": "Toestellen",
+  "tabReports": "Rapporten",
+  "catalogInfo": "Catalogus v{version} · 1 token = {price}",
+  "@catalogInfo": {
+    "placeholders": {
+      "version": {
+        "type": "int"
+      },
+      "price": {
+        "type": "String"
+      }
+    }
+  },
+  "newEnrollCode": "Nieuwe registratiecode",
+  "liability": "Uitstaande tokens",
+  "liabilityDetail": "{wallets} wallets met saldo, {negative} negatief",
+  "@liabilityDetail": {
+    "placeholders": {
+      "wallets": {
+        "type": "int"
+      },
+      "negative": {
+        "type": "int"
+      }
+    }
+  },
+  "topupsByMethod": "Opladingen per methode",
+  "salesByItem": "Verkoop per artikel",
+  "guestTitle": "Je Jeton-saldo",
+  "guestWorth": "waarde {amount}",
+  "@guestWorth": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "guestNotFound": "Tag niet gevonden",
+  "guestBlocked": "Deze tag is geblokkeerd. Ga naar de kassa.",
+  "recentActivity": "Recente activiteit",
+  "guestRefundUntil": "Terugbetaalbaar tot {date}",
+  "@guestRefundUntil": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestExpiry": "Tokens vervallen op {date}",
+  "@guestExpiry": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "guestOrganizer": "Georganiseerd door {name} ({number})",
+  "@guestOrganizer": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "number": {
+        "type": "String"
+      }
+    }
+  },
+  "policy": "Voorwaarden",
+  "kindTopup": "Opladen",
+  "kindPromo": "Gratis tokens",
+  "kindSale": "Aankoop",
+  "kindRefund": "Terugbetaling bestelling",
+  "kindCashout": "Terugbetaling",
+  "kindReplacement": "Tag vervangen",
+  "kindOther": "Aanpassing"
+}
