@@ -7,6 +7,7 @@ JavaScript port of TidalCycles.
 | --- | --- |
 | `tetris.strudel` | Tetris Theme A ("Korobeiniki", public-domain folk song), chiptune arrangement, 150 BPM, form A A B A |
 | `soupe-aux-choux.strudel` | *La Soupe aux choux* hommage: an **original** tune in the film's spirit, with a "cosmic" interlude. The real 1981 theme is still under copyright, so it is not transcribed here |
+| `midi/soupe-aux-choux-hommage.mid` | MIDI export of the hommage (GM, 116 BPM, tracks: lead, bass, space arp, pad, bleeps, drums). Regenerate with `python3 music/midi/make_soupe_midi.py` |
 | `index.html` | Minimal local player: pick a song, edit live, Play/Stop |
 | `flake.nix` | Nix flake for the tooling |
 
