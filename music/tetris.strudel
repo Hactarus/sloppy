@@ -1,0 +1,51 @@
+// Tetris — Theme A ("Korobeiniki", 19th-century Russian folk song, public domain)
+// Chiptune arrangement for Strudel.
+//
+// Play it: paste into https://strudel.cc, or `nix run ./music` and pick it.
+// Form: A A B A  (8 bars each, 1 bar = 1 cycle, 4/4 at 150 BPM)
+
+// ---- Melody (8th-note grid: 8 steps per bar, @n = hold n steps) ----
+const melA = `<
+  [e5@2 b4 c5 d5@2 c5 b4]
+  [a4@2 a4 c5 e5@2 d5 c5]
+  [b4@3 c5 d5@2 e5@2]
+  [c5@2 a4@2 a4@2 ~@2]
+  [~ d5@2 f5 a5@2 g5 f5]
+  [e5@3 c5 e5@2 d5 c5]
+  [b4@2 b4 c5 d5@2 e5@2]
+  [c5@2 a4@2 a4@2 ~@2]
+>`
+
+const melB = `<
+  [e5 c5]
+  [d5 b4]
+  [c5 a4]
+  [g#4 b4]
+  [e5 c5]
+  [d5 b4]
+  [c5 e5 a5@2]
+  g#5
+>`
+
+// ---- Bass roots (MIDI), played as pumping octaves ----
+//            Am  Am  E   Am  Dm  C   E   Am
+const bassA = "<40 45 44 45 38 36 44 45>"
+//            Am  E   Am  E   Am  E   Am  E
+const bassB = "<45 44 45 44 45 44 45 44>"
+
+const lead = (pat) => note(pat).s("square")
+  .gain(.28).lpf(3500).attack(.005).decay(.1).sustain(.7).release(.05)
+
+const bass = (roots) => note("[0 12]*4".add(roots)).s("triangle")
+  .gain(.55).decay(.12).sustain(.4)
+
+const drums = s("bd ~ bd ~, ~ sd ~ sd, hh*8").gain(.45)
+
+const A = stack(lead(melA), bass(bassA), drums)
+const B = stack(
+  lead(melB).lpf(2500),
+  bass(bassB),
+  s("bd ~ ~ ~, ~ ~ sd ~, hh*4").gain(.4)  // calmer bridge
+)
+
+arrange([8, A], [8, A], [8, B], [8, A]).cpm(150 / 4)
